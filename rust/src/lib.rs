@@ -34,10 +34,12 @@ static TOKIO_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
 });
 static EDGE_TTS_CLIENT: Lazy<Result<EdgeTtsClient, String>> = Lazy::new(|| {
     EdgeTtsClient::builder()
-        // Avoid keeping an idle Microsoft WebSocket open across requests.
-        .ws_pool_size(0)
+        // Reuse one recently-used WebSocket across short paragraph requests.
+        // A short idle TTL limits the chance of keeping a server-closed socket.
+        .ws_pool_size(1)
+        .ws_idle_ttl(std::time::Duration::from_secs(5))
         .ws_warmup(false)
-        // Use a fresh connection for each text chunk.
+        // Keep per-request chunk behavior unchanged in this test.
         .request_chunk_reuse(false)
         .connect_timeout(std::time::Duration::from_secs(15))
         .receive_timeout(std::time::Duration::from_secs(90))
