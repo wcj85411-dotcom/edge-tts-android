@@ -79,7 +79,8 @@ public final class VoiceRepository {
                 List<VoiceInfo> voices = new ArrayList<>(array.length());
                 for (int index = 0; index < array.length(); index++) {
                     JSONObject object = array.getJSONObject(index);
-                    voices.add(VoiceInfo.fromJson(object));
+                    VoiceInfo voice = VoiceInfo.fromJson(object);
+                    if (voice.isChineseVoice()) voices.add(voice);
                 }
                 voices.sort(Comparator
                         .comparing(VoiceInfo::getLocaleTag)
@@ -184,7 +185,8 @@ public final class VoiceRepository {
             JSONArray array = new JSONArray(json);
             List<VoiceInfo> voices = new ArrayList<>(array.length());
             for (int index = 0; index < array.length(); index++) {
-                voices.add(VoiceInfo.fromJson(array.getJSONObject(index)));
+                VoiceInfo voice = VoiceInfo.fromJson(array.getJSONObject(index));
+                if (voice.isChineseVoice()) voices.add(voice);
             }
             voices.sort(Comparator
                     .comparing(VoiceInfo::getLocaleTag)
