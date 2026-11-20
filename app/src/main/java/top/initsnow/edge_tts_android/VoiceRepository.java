@@ -28,7 +28,8 @@ public final class VoiceRepository {
     // neural voices. The engine identifiers remain unchanged for Android TTS.
     private static final Set<String> NOVEL_VOICE_NAMES = Set.of(
             "zh-CN-XiaoyiNeural",
-            "zh-CN-XiaoxiaoNeural"
+            "zh-CN-XiaoxiaoNeural",
+            "zh-TW-HsiaoChenNeural"
     );
 
     private static boolean isSupportedNovelVoice(VoiceInfo voice) {
