@@ -147,9 +147,10 @@ public final class EdgeTtsService extends TextToSpeechService {
         sLastSynthesisError = null;
         try {
             List<VoiceInfo> voices = repository().loadVoices(false);
-            String text = request.getCharSequenceText() == null
+            String sourceText = request.getCharSequenceText() == null
                     ? ""
                     : request.getCharSequenceText().toString();
+            String text = ChineseNovelTextPreprocessor.prepare(sourceText);
             if (text.trim().isEmpty()) {
                 String emptyMsg = "Synthesis request text is empty";
                 Log.w(TAG, emptyMsg);
