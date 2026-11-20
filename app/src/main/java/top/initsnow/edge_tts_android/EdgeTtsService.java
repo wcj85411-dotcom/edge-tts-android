@@ -162,7 +162,7 @@ public final class EdgeTtsService extends TextToSpeechService {
             String rate = mapPercentage(request.getSpeechRate(), settings().getDefaultRate());
             String pitch = mapPitch(request.getPitch(), settings().getDefaultPitch());
             String volume = settings().getDefaultVolume();
-            String beatriceConfigJson = settings().buildBeatriceConfigJson();
+            String beatriceConfigJson = null; // Beatrice is disabled in this build.
             logLatency("request=" + requestId
                     + " onSynthesizeText textChars=" + text.length()
                     + " voice=" + selectedVoice
