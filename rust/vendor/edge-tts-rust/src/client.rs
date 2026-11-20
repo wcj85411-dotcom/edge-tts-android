@@ -154,9 +154,6 @@ impl EdgeTtsClientBuilder {
 
     pub fn build(self) -> Result<EdgeTtsClient> {
         let http = Client::builder()
-            // Microsoft voice-list requests can fail on some Android VPN routes
-            // when ALPN negotiates HTTP/2. Keep this request path on HTTP/1.1.
-            .http1_only()
             .connect_timeout(self.connect_timeout)
             .timeout(self.receive_timeout)
             .use_rustls_tls()
