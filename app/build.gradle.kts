@@ -93,6 +93,11 @@ android {
 
     buildTypes {
         debug {
+            // CI supplies the stable keystore through EDGE_TTS_KEYSTORE_PATH.
+            // Keep the normal Android debug signature only for local builds without that variable.
+            if (!System.getenv("EDGE_TTS_KEYSTORE_PATH").isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("stable")
+            }
             ndk {
                 debugSymbolLevel = "SYMBOL_TABLE"
             }
