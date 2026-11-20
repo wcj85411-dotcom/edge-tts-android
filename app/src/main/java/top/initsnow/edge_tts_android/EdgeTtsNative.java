@@ -64,10 +64,8 @@ public final class EdgeTtsNative {
     }
 
     public static boolean isBeatriceSupported() {
-        if (!READY) {
-            return false;
-        }
-        return nativeIsBeatriceSupported();
+        // Beatrice is intentionally disabled in this lightweight Edge TTS build.
+        return false;
     }
 
     public static byte[] readPcmChunk(String requestId, int maxBytes) {
