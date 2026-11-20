@@ -85,6 +85,7 @@ public final class VoiceInfo {
 
     private static Map<String, String> createSpeakerNames() {
         Map<String, String> names = new HashMap<>();
+        names.put("hsiaochen", "晓臻");
         names.put("xiaoxiao", "晓晓"); names.put("yunxi", "云希");
         names.put("yunjian", "云健"); names.put("xiaoyi", "晓伊");
         names.put("xiaohan", "晓涵"); names.put("xiaomeng", "晓梦");
