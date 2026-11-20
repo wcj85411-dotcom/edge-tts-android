@@ -1,0 +1,1022 @@
+use std::collections::{HashSet, VecDeque};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
+
+use async_stream::try_stream;
+use futures_util::{SinkExt, Stream, StreamExt};
+use reqwest::Client;
+use tokio::fs;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use url::Url;
+
+use crate::constants::{DEFAULT_OUTPUT_FORMAT, TEXT_CHUNK_LIMIT, voice_list_url, websocket_url};
+use crate::error::{Error, Result};
+use crate::options::SpeakOptions;
+use crate::protocol::{
+    cbr_bitrate_bps, generate_connection_id, generate_muid, generate_sec_ms_gec,
+    offset_from_audio_bytes_with_bitrate, parse_metadata, sec_ms_gec_version,
+    speech_config_message, split_text, ssml_message, voice_headers, websocket_headers,
+};
+use crate::subtitles::{filter_boundaries, to_srt};
+use crate::types::{BoundaryEvent, SynthesisEvent, SynthesisResult, Voice};
+
+type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+pub type EventStream = Pin<Box<dyn Stream<Item = Result<SynthesisEvent>> + Send + Sync + 'static>>;
+
+#[derive(Debug, Clone)]
+pub struct EdgeTtsClient {
+    http: Client,
+    connect_timeout: Duration,
+    receive_timeout: Duration,
+    request_chunk_reuse: bool,
+    default_output_format: Option<String>,
+    ws_pool: Arc<WsPool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EdgeTtsClientBuilder {
+    connect_timeout: Duration,
+    receive_timeout: Duration,
+    ws_pool_size: usize,
+    ws_idle_ttl: Duration,
+    ws_warmup: bool,
+    request_chunk_reuse: bool,
+    default_output_format: Option<String>,
+}
+
+#[derive(Debug)]
+struct WsPool {
+    target_idle: usize,
+    idle_ttl: Duration,
+    warmup: bool,
+    next_id: AtomicU64,
+    state: Mutex<WsPoolState>,
+}
+
+#[derive(Debug, Default)]
+struct WsPoolState {
+    entries: Vec<Arc<PoolEntry>>,
+    warming: usize,
+}
+
+#[derive(Debug)]
+struct PoolEntry {
+    id: u64,
+    stream: Arc<AsyncMutex<WsStream>>,
+    state: Mutex<PoolEntryState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PoolEntryState {
+    Idle { returned_at: Instant },
+    Busy,
+}
+
+#[derive(Debug)]
+struct PooledWebsocket {
+    entry: Option<Arc<PoolEntry>>,
+    stream: Option<OwnedMutexGuard<WsStream>>,
+    reusable: bool,
+    pool: Arc<WsPool>,
+}
+
+#[derive(Debug)]
+struct ChunkFailure {
+    err: Error,
+    retryable_on_fresh_connection: bool,
+}
+
+#[derive(Debug)]
+enum ChunkFrame {
+    Event(SynthesisEvent),
+    Continue,
+    TurnEnd,
+}
+
+impl Default for EdgeTtsClientBuilder {
+    fn default() -> Self {
+        Self {
+            connect_timeout: Duration::from_secs(10),
+            receive_timeout: Duration::from_secs(60),
+            ws_pool_size: 1,
+            ws_idle_ttl: Duration::from_secs(15),
+            ws_warmup: true,
+            request_chunk_reuse: true,
+            default_output_format: None,
+        }
+    }
+}
+
+impl EdgeTtsClientBuilder {
+    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
+    pub fn receive_timeout(mut self, timeout: Duration) -> Self {
+        self.receive_timeout = timeout;
+        self
+    }
+
+    pub fn ws_pool_size(mut self, size: usize) -> Self {
+        self.ws_pool_size = size;
+        self
+    }
+
+    pub fn ws_idle_ttl(mut self, ttl: Duration) -> Self {
+        self.ws_idle_ttl = ttl;
+        self
+    }
+
+    pub fn ws_warmup(mut self, enabled: bool) -> Self {
+        self.ws_warmup = enabled;
+        self
+    }
+
+    pub fn request_chunk_reuse(mut self, enabled: bool) -> Self {
+        self.request_chunk_reuse = enabled;
+        self
+    }
+
+    pub fn default_output_format(mut self, format: impl Into<String>) -> Self {
+        self.default_output_format = Some(format.into());
+        self
+    }
+
+    pub fn build(self) -> Result<EdgeTtsClient> {
+        let http = Client::builder()
+            // Microsoft voice-list requests can fail on some Android VPN routes
+            // when ALPN negotiates HTTP/2. Keep this request path on HTTP/1.1.
+            .http1_only()
+            .connect_timeout(self.connect_timeout)
+            .timeout(self.receive_timeout)
+            .use_rustls_tls()
+            .build()?;
+        let client = EdgeTtsClient {
+            http,
+            connect_timeout: self.connect_timeout,
+            receive_timeout: self.receive_timeout,
+            request_chunk_reuse: self.request_chunk_reuse,
+            default_output_format: self.default_output_format,
+            ws_pool: Arc::new(WsPool {
+                target_idle: self.ws_pool_size,
+                idle_ttl: self.ws_idle_ttl,
+                warmup: self.ws_warmup,
+                next_id: AtomicU64::new(1),
+                state: Mutex::new(WsPoolState::default()),
+            }),
+        };
+        client.ensure_warm_pool();
+        Ok(client)
+    }
+}
+
+impl EdgeTtsClient {
+    pub fn builder() -> EdgeTtsClientBuilder {
+        EdgeTtsClientBuilder::default()
+    }
+
+    pub fn new() -> Result<Self> {
+        Self::builder().build()
+    }
+
+    pub fn resolve_output_format<'a>(&'a self, requested: &'a str) -> &'a str {
+        if !requested.trim().is_empty() {
+            requested
+        } else if let Some(default_fmt) = self.default_output_format.as_deref() {
+            default_fmt
+        } else {
+            DEFAULT_OUTPUT_FORMAT
+        }
+    }
+
+    pub async fn list_voices(&self) -> Result<Vec<Voice>> {
+        let sec_ms_gec = generate_sec_ms_gec(SystemTime::now());
+        let muid = generate_muid();
+        let mut request = self
+            .http
+            .get(format!(
+                "{}&Sec-MS-GEC={sec_ms_gec}&Sec-MS-GEC-Version={}",
+                voice_list_url(),
+                sec_ms_gec_version()
+            ))
+            .header("Cookie", format!("muid={muid};"))
+            .header("Accept-Language", "en-US,en;q=0.9");
+
+        for (name, value) in voice_headers() {
+            request = request.header(name, value);
+        }
+
+        Ok(request.send().await?.error_for_status()?.json().await?)
+    }
+
+    pub async fn stream(
+        &self,
+        text: impl Into<String>,
+        options: SpeakOptions,
+    ) -> Result<EventStream> {
+        options.validate()?;
+        let text = text.into();
+        let chunks = split_text(&text, TEXT_CHUNK_LIMIT)?;
+        let effective_format = self.resolve_output_format(&options.output_format).to_owned();
+        let cbr_bitrate = cbr_bitrate_bps(&effective_format);
+        let client = self.clone();
+
+        Ok(Box::pin(try_stream! {
+            macro_rules! stream_chunk_with_fresh_socket {
+                (
+                    $chunk:expr,
+                    $cumulative_audio_bytes:ident,
+                    $cumulative_boundary_ticks:ident,
+                    $cbr_bitrate:ident,
+                    $audio_received:ident,
+                    $pending_error:ident,
+                    $buffered_events:expr
+                ) => {{
+                    let offset_compensation = match $cbr_bitrate {
+                        Some(bps) => offset_from_audio_bytes_with_bitrate($cumulative_audio_bytes, bps),
+                        None => $cumulative_boundary_ticks,
+                    };
+                    let mut socket = match client.acquire_websocket().await {
+                        Ok(socket) => socket,
+                        Err(err) => {
+                            $pending_error = Some(err);
+                            break;
+                        }
+                    };
+                    match client.send_chunk_request(socket.stream_mut(), &options, $chunk).await {
+                        Ok(()) => {
+                            loop {
+                                match client
+                                    .read_chunk_frame(
+                                        socket.stream_mut(),
+                                        offset_compensation,
+                                        $buffered_events,
+                                    )
+                                    .await
+                                {
+                                    Ok(ChunkFrame::Event(event)) => {
+                                        if let SynthesisEvent::Audio(chunk) = &event {
+                                            $cumulative_audio_bytes += chunk.len();
+                                            $audio_received = true;
+                                        } else if let SynthesisEvent::Boundary(boundary) = &event {
+                                            $cumulative_boundary_ticks =
+                                                $cumulative_boundary_ticks.max(boundary.offset_ticks + boundary.duration_ticks);
+                                        }
+                                        yield event;
+                                    }
+                                    Ok(ChunkFrame::Continue) => {}
+                                    Ok(ChunkFrame::TurnEnd) => {
+                                        socket.mark_reusable();
+                                        break;
+                                    }
+                                    Err(failure) => {
+                                        pool_log(&format!(
+                                            "fresh socket read failure retryable={}",
+                                            failure.retryable_on_fresh_connection
+                                        ));
+                                        socket.mark_dirty();
+                                        $pending_error = Some(failure.err);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Err(failure) => {
+                            pool_log(&format!(
+                                "fresh socket send failure retryable={}",
+                                failure.retryable_on_fresh_connection
+                            ));
+                            socket.mark_dirty();
+                            $pending_error = Some(failure.err);
+                            break;
+                        }
+                    }
+
+                    if $pending_error.is_some() {
+                        break;
+                    }
+                }};
+            }
+
+            let mut cumulative_audio_bytes = 0usize;
+            let mut cumulative_boundary_ticks = 0u64;
+            let mut audio_received = false;
+            let mut pending_error = None;
+            let mut buffered_events = VecDeque::new();
+
+            if client.request_chunk_reuse {
+                let mut shared_socket = match client.acquire_websocket().await {
+                    Ok(socket) => Some(socket),
+                    Err(err) => {
+                        pending_error = Some(err);
+                        None
+                    }
+                };
+
+                if let Some(socket) = shared_socket.as_mut() {
+                    let mut fallback_at = None;
+
+                    for (index, chunk) in chunks.iter().enumerate() {
+                        let offset_compensation = match cbr_bitrate {
+                            Some(bps) => offset_from_audio_bytes_with_bitrate(cumulative_audio_bytes, bps),
+                            None => cumulative_boundary_ticks,
+                        };
+                        match client.send_chunk_request(socket.stream_mut(), &options, chunk).await {
+                            Ok(()) => {
+                                loop {
+                                    match client
+                                        .read_chunk_frame(
+                                            socket.stream_mut(),
+                                            offset_compensation,
+                                            &mut buffered_events,
+                                        )
+                                        .await
+                                    {
+                                        Ok(ChunkFrame::Event(event)) => {
+                                            if let SynthesisEvent::Audio(chunk) = &event {
+                                                cumulative_audio_bytes += chunk.len();
+                                                audio_received = true;
+                                            } else if let SynthesisEvent::Boundary(boundary) = &event {
+                                                cumulative_boundary_ticks =
+                                                    cumulative_boundary_ticks.max(boundary.offset_ticks + boundary.duration_ticks);
+                                            }
+                                            yield event;
+                                        }
+                                        Ok(ChunkFrame::Continue) => {}
+                                        Ok(ChunkFrame::TurnEnd) => break,
+                                        Err(failure) => {
+                                            pool_log(&format!(
+                                                "reused socket read failure at chunk={index} retryable={}",
+                                                failure.retryable_on_fresh_connection
+                                            ));
+                                            socket.mark_dirty();
+                                            if failure.retryable_on_fresh_connection {
+                                                pool_log(&format!(
+                                                    "fallback retryable frame failure at chunk={index}"
+                                                ));
+                                                fallback_at = Some(index);
+                                            } else {
+                                                pending_error = Some(failure.err);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(failure) => {
+                                pool_log(&format!(
+                                    "reused socket send failure at chunk={index} retryable={}",
+                                    failure.retryable_on_fresh_connection
+                                ));
+                                socket.mark_dirty();
+                                if failure.retryable_on_fresh_connection {
+                                    pool_log(&format!(
+                                        "fallback retryable send failure at chunk={index}"
+                                    ));
+                                    fallback_at = Some(index);
+                                    break;
+                                }
+                                pending_error = Some(failure.err);
+                                break;
+                            }
+                        }
+
+                        if fallback_at.is_some() || pending_error.is_some() {
+                            break;
+                        }
+                    }
+
+                    if fallback_at.is_none() && pending_error.is_none() {
+                        socket.mark_reusable();
+                    }
+                    drop(shared_socket);
+
+
+                    if let Some(start_index) = fallback_at {
+                        for chunk in chunks.iter().skip(start_index) {
+                            stream_chunk_with_fresh_socket!(
+                                chunk,
+                                cumulative_audio_bytes,
+                                cumulative_boundary_ticks,
+                                cbr_bitrate,
+                                audio_received,
+                                pending_error,
+                                &mut buffered_events
+                            );
+                        }
+                    }
+                }
+            } else {
+                for chunk in &chunks {
+                    stream_chunk_with_fresh_socket!(
+                        chunk,
+                        cumulative_audio_bytes,
+                        cumulative_boundary_ticks,
+                        cbr_bitrate,
+                        audio_received,
+                        pending_error,
+                        &mut buffered_events
+                    );
+                }
+            }
+
+            if let Some(err) = pending_error {
+                Err(err)?;
+            }
+
+            if !audio_received {
+                Err(Error::NoAudioReceived)?;
+            }
+        }))
+    }
+
+    pub async fn synthesize(
+        &self,
+        text: impl Into<String>,
+        options: SpeakOptions,
+    ) -> Result<SynthesisResult> {
+        let mut stream = self.stream(text, options).await?;
+        let mut audio = Vec::with_capacity(64 * 1024);
+        let mut boundaries = Vec::new();
+
+        while let Some(event) = stream.next().await {
+            match event? {
+                SynthesisEvent::Audio(chunk) => audio.extend_from_slice(&chunk),
+                SynthesisEvent::Boundary(boundary) => boundaries.push(boundary),
+            }
+        }
+
+        let audio = crate::webm::finalize_webm(&audio);
+
+        Ok(SynthesisResult { audio, boundaries })
+    }
+
+
+    pub async fn save(
+        &self,
+        text: impl Into<String>,
+        options: SpeakOptions,
+        audio_path: impl AsRef<std::path::Path>,
+        srt_path: Option<impl AsRef<std::path::Path>>,
+    ) -> Result<SynthesisResult> {
+        let result = self.synthesize(text, options.clone()).await?;
+        fs::write(audio_path, &result.audio).await?;
+        if let Some(path) = srt_path {
+            let filtered = filter_boundaries(&result.boundaries, options.boundary);
+            fs::write(path, to_srt(&filtered)).await?;
+        }
+        Ok(result)
+    }
+
+    async fn send_chunk_request(
+        &self,
+        websocket: &mut WsStream,
+        options: &SpeakOptions,
+        chunk: &str,
+    ) -> std::result::Result<(), ChunkFailure> {
+        let output_format = self.resolve_output_format(&options.output_format);
+        let config_message = speech_config_message(options.boundary, output_format);
+        let ssml_message = ssml_message(options, chunk).map_err(|err| ChunkFailure {
+            err,
+            retryable_on_fresh_connection: false,
+        })?;
+
+        debug_frame("send-config", config_message.as_bytes());
+        websocket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                config_message.into(),
+            ))
+            .await
+            .map_err(|err| ChunkFailure {
+                err: err.into(),
+                retryable_on_fresh_connection: true,
+            })?;
+        debug_frame("send-ssml", ssml_message.as_bytes());
+        websocket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                ssml_message.into(),
+            ))
+            .await
+            .map_err(|err| ChunkFailure {
+                err: err.into(),
+                retryable_on_fresh_connection: true,
+            })?;
+        Ok(())
+    }
+
+    async fn read_chunk_frame(
+        &self,
+        websocket: &mut WsStream,
+        offset_compensation: u64,
+        buffered_events: &mut VecDeque<SynthesisEvent>,
+    ) -> std::result::Result<ChunkFrame, ChunkFailure> {
+        if let Some(event) = buffered_events.pop_front() {
+            return Ok(ChunkFrame::Event(event));
+        }
+
+        let next = timeout(self.receive_timeout, websocket.next())
+            .await
+            .map_err(|_| ChunkFailure {
+                err: Error::UnexpectedResponse("websocket receive timeout"),
+                retryable_on_fresh_connection: false,
+            })?;
+        let Some(message) = next else {
+            return Err(ChunkFailure {
+                err: Error::UnexpectedResponse("websocket closed before turn end"),
+                retryable_on_fresh_connection: false,
+            });
+        };
+
+        match message {
+            Ok(tokio_tungstenite::tungstenite::Message::Text(text_frame)) => {
+                let data = text_frame.as_bytes();
+                debug_frame("text", data);
+                let header_end = data
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .ok_or(ChunkFailure {
+                        err: Error::MissingHeaders,
+                        retryable_on_fresh_connection: false,
+                    })?;
+                let header_str = std::str::from_utf8(&data[..header_end]).map_err(|_| {
+                    ChunkFailure {
+                        err: Error::UnexpectedResponse("headers are not valid utf-8"),
+                        retryable_on_fresh_connection: false,
+                    }
+                })?;
+                let mut path = None;
+                for line in header_str.split("\r\n").filter(|line| !line.is_empty()) {
+                    if let Some((key, value)) = line.split_once(':')
+                        && key.eq_ignore_ascii_case("Path")
+                    {
+                        path = Some(value.trim());
+                        break;
+                    }
+                }
+                let payload = &data[header_end + 4..];
+                match path {
+                    Some("audio.metadata") => {
+                        let events =
+                            parse_metadata(payload, offset_compensation).map_err(|err| {
+                                ChunkFailure {
+                                    err,
+                                    retryable_on_fresh_connection: false,
+                                }
+                            })?;
+                        if events.is_empty() {
+                            Ok(ChunkFrame::Continue)
+                        } else {
+                            buffered_events.extend(events);
+                            Ok(ChunkFrame::Event(
+                                buffered_events
+                                    .pop_front()
+                                    .expect("metadata buffer populated"),
+                            ))
+                        }
+                    }
+                    Some("turn.end") => Ok(ChunkFrame::TurnEnd),
+                    Some("response") | Some("turn.start") => Ok(ChunkFrame::Continue),
+                    Some(other) => Err(ChunkFailure {
+                        err: Error::UnknownPath(other.to_owned()),
+                        retryable_on_fresh_connection: false,
+                    }),
+                    None => Err(ChunkFailure {
+                        err: Error::MissingHeaders,
+                        retryable_on_fresh_connection: false,
+                    }),
+                }
+            }
+            Ok(tokio_tungstenite::tungstenite::Message::Binary(frame)) => {
+                debug_frame("binary", &frame);
+                if frame.len() < 2 {
+                    return Err(ChunkFailure {
+                        err: Error::UnexpectedResponse("binary frame too short"),
+                        retryable_on_fresh_connection: false,
+                    });
+                }
+                let header_length = u16::from_be_bytes([frame[0], frame[1]]) as usize;
+                let header_start = 2usize;
+                let header_end = header_start
+                    .checked_add(header_length)
+                    .ok_or(ChunkFailure {
+                        err: Error::UnexpectedResponse("binary header length overflow"),
+                        retryable_on_fresh_connection: false,
+                    })?;
+                if header_end > frame.len() {
+                    return Err(ChunkFailure {
+                        err: Error::UnexpectedResponse("binary header length exceeds frame length"),
+                        retryable_on_fresh_connection: false,
+                    });
+                }
+                let header_str = std::str::from_utf8(&frame[header_start..header_end]).map_err(|_| {
+                    ChunkFailure {
+                        err: Error::UnexpectedResponse("headers are not valid utf-8"),
+                        retryable_on_fresh_connection: false,
+                    }
+                })?;
+                let mut path = None;
+                let mut content_type = None;
+                for line in header_str.split("\r\n").filter(|line| !line.is_empty()) {
+                    if let Some((key, value)) = line.split_once(':') {
+                        if key.eq_ignore_ascii_case("Path") {
+                            path = Some(value.trim());
+                        } else if key.eq_ignore_ascii_case("Content-Type") {
+                            content_type = Some(value.trim());
+                        }
+                    }
+                }
+                if path != Some("audio") {
+                    return Err(ChunkFailure {
+                        err: Error::UnexpectedResponse("binary frame path was not audio"),
+                        retryable_on_fresh_connection: false,
+                    });
+                }
+                let mut payload_start = header_end;
+                if frame.get(payload_start..).is_some_and(|s| s.starts_with(b"\r\n")) {
+                    payload_start += 2;
+                }
+                let payload_len = frame.len() - payload_start;
+                match content_type {
+                    Some(ct) if ct.starts_with("audio/") => {
+                        if payload_len == 0 {
+                            return Err(ChunkFailure {
+                                err: Error::UnexpectedResponse("audio frame missing payload"),
+                                retryable_on_fresh_connection: false,
+                            });
+                        }
+                        Ok(ChunkFrame::Event(SynthesisEvent::Audio(
+                            frame.slice(payload_start..),
+                        )))
+                    }
+                    None if payload_len == 0 => Ok(ChunkFrame::Continue),
+                    None => Err(ChunkFailure {
+                        err: Error::UnexpectedResponse(
+                            "binary frame had payload without content type",
+                        ),
+                        retryable_on_fresh_connection: false,
+                    }),
+                    Some(_) => Err(ChunkFailure {
+                        err: Error::UnexpectedResponse("unexpected binary content type"),
+                        retryable_on_fresh_connection: false,
+                    }),
+                }
+            }
+            Ok(tokio_tungstenite::tungstenite::Message::Close(frame)) => {
+                if debug_enabled() {
+                    eprintln!("[edge-tts-debug] close: {frame:?}");
+                }
+                Err(ChunkFailure {
+                    err: Error::UnexpectedResponse("websocket closed before turn end"),
+                    retryable_on_fresh_connection: false,
+                })
+            }
+            Ok(
+                tokio_tungstenite::tungstenite::Message::Ping(_)
+                | tokio_tungstenite::tungstenite::Message::Pong(_)
+                | tokio_tungstenite::tungstenite::Message::Frame(_),
+            ) => Ok(ChunkFrame::Continue),
+            Err(err) => Err(ChunkFailure {
+                err: err.into(),
+                retryable_on_fresh_connection: false,
+            }),
+        }
+    }
+
+    async fn acquire_websocket(&self) -> Result<PooledWebsocket> {
+        if let Some(entry) = self.take_idle_websocket() {
+            pool_log("ws_pool hit");
+            self.ensure_warm_pool();
+            return Ok(PooledWebsocket {
+                stream: Some(entry.stream.clone().lock_owned().await),
+                entry: Some(entry),
+                reusable: false,
+                pool: Arc::clone(&self.ws_pool),
+            });
+        }
+
+        pool_log("ws_pool miss");
+        let stream = self.connect_websocket_fresh().await?;
+        let entry = self.ws_pool.insert_busy(stream);
+        self.ensure_warm_pool();
+        Ok(PooledWebsocket {
+            stream: Some(entry.stream.clone().lock_owned().await),
+            entry: Some(entry),
+            reusable: false,
+            pool: Arc::clone(&self.ws_pool),
+        })
+    }
+
+    fn take_idle_websocket(&self) -> Option<Arc<PoolEntry>> {
+        if self.ws_pool.target_idle == 0 {
+            pool_log("ws_pool disabled");
+            return None;
+        }
+
+        let mut state = self.ws_pool.state.lock().expect("websocket pool poisoned");
+        self.ws_pool
+            .cleanup_expired_locked(&mut state, Instant::now());
+        for entry in &state.entries {
+            let mut entry_state = entry.state.lock().expect("pool entry poisoned");
+            if matches!(*entry_state, PoolEntryState::Idle { .. }) {
+                *entry_state = PoolEntryState::Busy;
+                pool_log("ws_pool took idle socket candidate");
+                return Some(Arc::clone(entry));
+            }
+        }
+        pool_log("ws_pool empty");
+        None
+    }
+
+    fn ensure_warm_pool(&self) {
+        if !self.ws_pool.warmup || self.ws_pool.target_idle == 0 {
+            return;
+        }
+
+        let to_spawn = {
+            let mut state = self.ws_pool.state.lock().expect("websocket pool poisoned");
+            self.ws_pool
+                .cleanup_expired_locked(&mut state, Instant::now());
+            let missing = self
+                .ws_pool
+                .replenishment_needed(self.ws_pool.idle_count_locked(&state), state.warming);
+            state.warming += missing;
+            missing
+        };
+
+        for _ in 0..to_spawn {
+            let client = self.clone();
+            tokio::spawn(async move {
+                let stream = client.connect_websocket_fresh().await.ok();
+                let mut state = client
+                    .ws_pool
+                    .state
+                    .lock()
+                    .expect("websocket pool poisoned");
+                state.warming = state.warming.saturating_sub(1);
+                if let Some(stream) = stream
+                    && client.ws_pool.idle_count_locked(&state) < client.ws_pool.target_idle
+                {
+                    pool_log("ws_pool warmup added idle socket");
+                    state.entries.push(client.ws_pool.new_idle_entry(stream));
+                }
+            });
+        }
+    }
+
+    async fn connect_websocket_fresh(&self) -> Result<WsStream> {
+        let sec_ms_gec = generate_sec_ms_gec(SystemTime::now());
+        let muid = generate_muid();
+        let url = Url::parse(&format!(
+            "{}&ConnectionId={}&Sec-MS-GEC={sec_ms_gec}&Sec-MS-GEC-Version={}",
+            websocket_url(),
+            generate_connection_id(),
+            sec_ms_gec_version(),
+        ))
+        .map_err(|_| Error::UnexpectedResponse("invalid websocket url"))?;
+
+        let mut request = url.as_str().into_client_request()?;
+        for (name, value) in websocket_headers(&muid) {
+            request.headers_mut().insert(
+                http::header::HeaderName::from_bytes(name.as_bytes())
+                    .map_err(|_| Error::UnexpectedResponse("invalid header name"))?,
+                http::HeaderValue::from_str(&value)
+                    .map_err(|_| Error::UnexpectedResponse("invalid header value"))?,
+            );
+        }
+
+        let connect = timeout(self.connect_timeout, connect_async(request))
+            .await
+            .map_err(|_| Error::UnexpectedResponse("websocket connect timeout"))?;
+        let (stream, _) = connect?;
+        Ok(stream)
+    }
+}
+
+impl PooledWebsocket {
+    fn stream_mut(&mut self) -> &mut WsStream {
+        self.stream
+            .as_mut()
+            .expect("pooled websocket missing stream")
+    }
+
+    fn mark_reusable(&mut self) {
+        self.reusable = true;
+    }
+
+    fn mark_dirty(&mut self) {
+        self.reusable = false;
+    }
+}
+
+impl Drop for PooledWebsocket {
+    fn drop(&mut self) {
+        let Some(_stream) = self.stream.take() else {
+            return;
+        };
+        let Some(entry) = self.entry.take() else {
+            return;
+        };
+        if !self.reusable || self.pool.target_idle == 0 {
+            self.pool.remove_entry(entry.id);
+            return;
+        }
+
+        let returned_at = Instant::now();
+        {
+            let mut entry_state = entry.state.lock().expect("pool entry poisoned");
+            *entry_state = PoolEntryState::Idle { returned_at };
+        }
+
+        let mut state = self.pool.state.lock().expect("websocket pool poisoned");
+        self.pool.cleanup_expired_locked(&mut state, returned_at);
+        let replaced = self.pool.trim_idle_locked(&mut state, entry.id);
+        if replaced {
+            pool_log("ws_pool replace oldest idle socket with recently used socket");
+        } else {
+            pool_log("ws_pool return socket to idle");
+        }
+    }
+}
+
+impl WsPool {
+    fn new_idle_entry(&self, stream: WsStream) -> Arc<PoolEntry> {
+        Arc::new(PoolEntry {
+            id: self.next_id.fetch_add(1, Ordering::Relaxed),
+            stream: Arc::new(AsyncMutex::new(stream)),
+            state: Mutex::new(PoolEntryState::Idle {
+                returned_at: Instant::now(),
+            }),
+        })
+    }
+
+    fn insert_busy(&self, stream: WsStream) -> Arc<PoolEntry> {
+        let entry = Arc::new(PoolEntry {
+            id: self.next_id.fetch_add(1, Ordering::Relaxed),
+            stream: Arc::new(AsyncMutex::new(stream)),
+            state: Mutex::new(PoolEntryState::Busy),
+        });
+        let mut state = self.state.lock().expect("websocket pool poisoned");
+        state.entries.push(Arc::clone(&entry));
+        entry
+    }
+
+    fn remove_entry(&self, entry_id: u64) {
+        let mut state = self.state.lock().expect("websocket pool poisoned");
+        state.entries.retain(|entry| entry.id != entry_id);
+    }
+
+    fn is_expired(&self, returned_at: Instant, now: Instant) -> bool {
+        now.saturating_duration_since(returned_at) >= self.idle_ttl
+    }
+
+    fn idle_count_locked(&self, state: &WsPoolState) -> usize {
+        state
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    *entry.state.lock().expect("pool entry poisoned"),
+                    PoolEntryState::Idle { .. }
+                )
+            })
+            .count()
+    }
+
+    fn cleanup_expired_locked(&self, state: &mut WsPoolState, now: Instant) {
+        state.entries.retain(|entry| {
+            let entry_state = entry.state.lock().expect("pool entry poisoned");
+            match *entry_state {
+                PoolEntryState::Idle { returned_at } if self.is_expired(returned_at, now) => {
+                    pool_log("ws_pool drop expired idle socket");
+                    false
+                }
+                _ => true,
+            }
+        });
+    }
+
+    fn trim_idle_locked(&self, state: &mut WsPoolState, keep_entry_id: u64) -> bool {
+        let mut idle_entries = state
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                let entry_state = entry.state.lock().expect("pool entry poisoned");
+                match *entry_state {
+                    PoolEntryState::Idle { returned_at } => Some((entry.id, returned_at)),
+                    PoolEntryState::Busy => None,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if idle_entries.len() <= self.target_idle {
+            return false;
+        }
+
+        idle_entries.sort_by_key(|(_, returned_at)| *returned_at);
+        let mut removed = false;
+        let overflow = idle_entries.len().saturating_sub(self.target_idle);
+        let mut to_remove = HashSet::with_capacity(overflow);
+        for (entry_id, _) in idle_entries {
+            if to_remove.len() == overflow {
+                break;
+            }
+            if entry_id == keep_entry_id {
+                continue;
+            }
+            to_remove.insert(entry_id);
+        }
+
+        if !to_remove.is_empty() {
+            state.entries.retain(|entry| {
+                let should_keep = !to_remove.contains(&entry.id);
+                if !should_keep {
+                    removed = true;
+                }
+                should_keep
+            });
+        }
+
+        removed
+    }
+
+    fn replenishment_needed(&self, idle_len: usize, warming: usize) -> usize {
+        self.target_idle
+            .saturating_sub(idle_len.saturating_add(warming))
+    }
+}
+
+pub fn subtitles(events: &[BoundaryEvent]) -> String {
+    to_srt(events)
+}
+
+fn debug_frame(kind: &str, payload: &[u8]) {
+    if debug_enabled() {
+        eprintln!(
+            "[edge-tts-debug] {kind}: {}",
+            String::from_utf8_lossy(payload)
+        );
+    }
+}
+
+fn debug_enabled() -> bool {
+    std::env::var_os("EDGE_TTS_DEBUG").is_some()
+}
+
+fn pool_log(message: &str) {
+    if debug_enabled() {
+        eprintln!("[edge-tts-debug] {message}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_defaults_enable_pooling_and_chunk_reuse() {
+        let builder = EdgeTtsClientBuilder::default();
+        assert_eq!(builder.ws_pool_size, 1);
+        assert_eq!(builder.ws_idle_ttl, Duration::from_secs(15));
+        assert!(builder.ws_warmup);
+        assert!(builder.request_chunk_reuse);
+    }
+
+
+    #[test]
+    fn pool_replenishment_respects_idle_and_warming_counts() {
+        let pool = WsPool {
+            target_idle: 2,
+            idle_ttl: Duration::from_secs(15),
+            warmup: true,
+            next_id: AtomicU64::new(1),
+            state: Mutex::new(WsPoolState::default()),
+        };
+
+        assert_eq!(pool.replenishment_needed(0, 0), 2);
+        assert_eq!(pool.replenishment_needed(1, 0), 1);
+        assert_eq!(pool.replenishment_needed(1, 1), 0);
+        assert_eq!(pool.replenishment_needed(2, 0), 0);
+    }
+
+    #[test]
+    fn idle_connection_ttl_only_applies_after_expiration() {
+        let pool = WsPool {
+            target_idle: 1,
+            idle_ttl: Duration::from_secs(15),
+            warmup: true,
+            next_id: AtomicU64::new(1),
+            state: Mutex::new(WsPoolState::default()),
+        };
+        let now = Instant::now();
+
+        assert!(!pool.is_expired(now - Duration::from_secs(14), now));
+        assert!(pool.is_expired(now - Duration::from_secs(15), now));
+    }
+}
