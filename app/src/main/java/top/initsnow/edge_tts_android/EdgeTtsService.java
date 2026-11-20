@@ -205,6 +205,13 @@ public final class EdgeTtsService extends TextToSpeechService {
                 return;
             }
 
+            // Report the utterance's source-text range to Android TTS clients.
+            // This is a whole-utterance range; word-level timing still requires
+            // forwarding native Edge TTS boundary metadata.
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                callback.rangeStart(0, text.length(), 0);
+            }
+
             int maxBufferSize = Math.max(callback.getMaxBufferSize(), 8192);
             boolean firstChunkReadLogged = false;
             boolean firstAudioAvailableLogged = false;
