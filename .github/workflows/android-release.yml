@@ -40,7 +40,7 @@ jobs:
 
       - name: Build ARM64 debug APK
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/30.0.14904198
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/30.0.14904198
           LIBOPUS_STATIC: "1"
           OPUS_STATIC: "1"
         run: ./gradlew --no-daemon assembleDebug
