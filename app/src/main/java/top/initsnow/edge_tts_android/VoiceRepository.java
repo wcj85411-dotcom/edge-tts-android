@@ -24,6 +24,17 @@ public final class VoiceRepository {
     private static volatile VoiceRepository instance;
     private static final String KEY_VOICE_CACHE = "voice_cache_json";
 
+    // Keep the first release focused on two commonly used Simplified Chinese
+    // neural voices. The engine identifiers remain unchanged for Android TTS.
+    private static final Set<String> NOVEL_VOICE_NAMES = Set.of(
+            "zh-CN-XiaoyiNeural",
+            "zh-CN-XiaoxiaoNeural"
+    );
+
+    private static boolean isSupportedNovelVoice(VoiceInfo voice) {
+        return voice != null && NOVEL_VOICE_NAMES.contains(voice.getShortName());
+    }
+
     private final Context applicationContext;
     private final SharedPreferences sharedPreferences;
     private final Object lock = new Object();
@@ -80,7 +91,7 @@ public final class VoiceRepository {
                 for (int index = 0; index < array.length(); index++) {
                     JSONObject object = array.getJSONObject(index);
                     VoiceInfo voice = VoiceInfo.fromJson(object);
-                    if (voice.isChineseVoice()) voices.add(voice);
+                    if (isSupportedNovelVoice(voice)) voices.add(voice);
                 }
                 voices.sort(Comparator
                         .comparing(VoiceInfo::getLocaleTag)
