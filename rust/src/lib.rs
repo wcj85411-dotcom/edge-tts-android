@@ -823,6 +823,17 @@ fn into_java_string(env: &mut JNIEnv<'_>, value: Option<String>) -> jstring {
     }
 }
 
+fn format_error_chain(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str("\nCaused by: ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_top_initsnow_edge_1tts_1android_EdgeTtsNative_nativeListVoices(
     mut env: JNIEnv<'_>,
@@ -832,7 +843,7 @@ pub extern "system" fn Java_top_initsnow_edge_1tts_1android_EdgeTtsNative_native
         let voices = shared_client()?
             .list_voices()
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format_error_chain(&error))?;
         serde_json::to_string(&voices).map_err(|error| error.to_string())
     });
 
