@@ -41,6 +41,9 @@ public final class VoiceInfo {
     public String getName() { return name; }
     public String getShortName() { return shortName; }
     public String getLocaleTag() { return localeTag; }
+    public boolean isChineseVoice() {
+        return "zh".equalsIgnoreCase(locale.getLanguage());
+    }
     public String getGender() { return gender; }
     public String getFriendlyName() { return friendlyName; }
     public Locale toLocale() { return locale; }
