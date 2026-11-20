@@ -32,8 +32,18 @@ static TOKIO_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
         .build()
         .expect("tokio runtime initialization failed")
 });
-static EDGE_TTS_CLIENT: Lazy<Result<EdgeTtsClient, String>> =
-    Lazy::new(|| EdgeTtsClient::new().map_err(|error| error.to_string()));
+static EDGE_TTS_CLIENT: Lazy<Result<EdgeTtsClient, String>> = Lazy::new(|| {
+    EdgeTtsClient::builder()
+        // Avoid keeping an idle Microsoft WebSocket open across requests.
+        .ws_pool_size(0)
+        .ws_warmup(false)
+        // Use a fresh connection for each text chunk.
+        .request_chunk_reuse(false)
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .receive_timeout(std::time::Duration::from_secs(90))
+        .build()
+        .map_err(|error| error.to_string())
+});
 
 #[cfg(target_os = "android")]
 const ANDROID_LOG_INFO: i32 = 4;
