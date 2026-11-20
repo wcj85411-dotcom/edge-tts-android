@@ -77,6 +77,10 @@ public final class VoiceRepository {
                 }
             }
             if (!EdgeTtsNative.isReady()) {
+                List<VoiceInfo> fallbackVoices = loadCachedFallbackVoices();
+                if (!fallbackVoices.isEmpty()) {
+                    return fallbackVoices;
+                }
                 throw new IOException(applicationContext.getString(
                         R.string.native_library_missing,
                         EdgeTtsNative.getLoadError()
@@ -85,6 +89,10 @@ public final class VoiceRepository {
             try {
                 String json = EdgeTtsNative.listVoicesJson();
                 if (json.startsWith("ERROR:")) {
+                    List<VoiceInfo> fallbackVoices = loadCachedFallbackVoices();
+                    if (!fallbackVoices.isEmpty()) {
+                        return fallbackVoices;
+                    }
                     throw new IOException(json.substring("ERROR:".length()).trim());
                 }
                 JSONArray array = new JSONArray(json);
@@ -186,6 +194,17 @@ public final class VoiceRepository {
 
     public Set<String> buildVoiceFeatures() {
         return voiceFeatures;
+    }
+
+    private List<VoiceInfo> loadCachedFallbackVoices() throws IOException {
+        if (!cachedVoices.isEmpty()) {
+            return cachedVoices;
+        }
+        List<VoiceInfo> storedVoices = loadStoredVoices();
+        if (!storedVoices.isEmpty()) {
+            updateCache(storedVoices);
+        }
+        return cachedVoices;
     }
 
     private List<VoiceInfo> loadStoredVoices() throws IOException {
