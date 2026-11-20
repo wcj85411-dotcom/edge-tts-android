@@ -68,6 +68,22 @@ jobs:
           OPUS_STATIC: "1"
         run: ./gradlew --no-daemon assembleDebug
 
+      - name: Verify stable APK certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$APK" || { echo "APK not found"; exit 1; }
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          ACTUAL="$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print tolower($2)}' | tr -d ':')"
+          EXPECTED="1cb922d40016e2ef44f1a023f2748ee592cf277a63c99cbc8d01ff470478e2ad"
+          echo "APK certificate SHA-256: $ACTUAL"
+          test "$ACTUAL" = "$EXPECTED" || {
+            echo "APK is not signed with the expected stable certificate."
+            exit 1
+          }
+          echo "Stable APK signature verified."
+
       - name: Upload test APK
         uses: actions/upload-artifact@v4
         with:
