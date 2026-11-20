@@ -2,6 +2,7 @@ use std::collections::{HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime};
 
 use async_stream::try_stream;
@@ -9,9 +10,10 @@ use futures_util::{SinkExt, Stream, StreamExt};
 use reqwest::Client;
 use tokio::fs;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::net::{TcpStream, lookup_host};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, client_async_tls_with_config};
 use url::Url;
 
 use crate::constants::{DEFAULT_OUTPUT_FORMAT, TEXT_CHUNK_LIMIT, voice_list_url, websocket_url};
@@ -37,6 +39,7 @@ pub struct EdgeTtsClient {
     request_chunk_reuse: bool,
     default_output_format: Option<String>,
     ws_pool: Arc<WsPool>,
+    ws_ip_hint: Arc<Mutex<Option<SocketAddr>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +174,7 @@ impl EdgeTtsClientBuilder {
                 next_id: AtomicU64::new(1),
                 state: Mutex::new(WsPoolState::default()),
             }),
+            ws_ip_hint: Arc::new(Mutex::new(None)),
         };
         client.ensure_warm_pool();
         Ok(client)
@@ -213,7 +217,12 @@ impl EdgeTtsClient {
             request = request.header(name, value);
         }
 
-        Ok(request.send().await?.error_for_status()?.json().await?)
+        let response = request.send().await?.error_for_status()?;
+        if let Some(addr) = response.remote_addr() {
+            *self.ws_ip_hint.lock().expect("websocket IP hint poisoned") =
+                Some(SocketAddr::new(addr.ip(), 443));
+        }
+        Ok(response.json().await?)
     }
 
     pub async fn stream(
@@ -791,11 +800,70 @@ impl EdgeTtsClient {
             );
         }
 
-        let connect = timeout(self.connect_timeout, connect_async(request))
-            .await
-            .map_err(|_| Error::UnexpectedResponse("websocket connect timeout"))?;
-        let (stream, _) = connect?;
-        Ok(stream)
+        let host = url
+            .host_str()
+            .ok_or(Error::UnexpectedResponse("websocket URL has no host"))?;
+        let port = url
+            .port_or_known_default()
+            .ok_or(Error::UnexpectedResponse("websocket URL has no port"))?;
+
+        // Reuse the actual IP used by the successful voice-list request first.
+        // The request URI remains unchanged, preserving TLS SNI and certificate checks.
+        let mut addresses = Vec::new();
+        if let Some(addr) = *self.ws_ip_hint.lock().expect("websocket IP hint poisoned") {
+            if addr.port() == port {
+                addresses.push(addr);
+            }
+        }
+
+        if let Ok(Ok(resolved)) = timeout(
+            self.connect_timeout,
+            lookup_host((host, port)),
+        )
+        .await
+        {
+            for addr in resolved {
+                if !addresses.contains(&addr) {
+                    addresses.push(addr);
+                }
+            }
+        }
+
+        if addresses.is_empty() {
+            return Err(Error::UnexpectedResponse("websocket host resolved to no IP addresses"));
+        }
+
+        let mut last_error = None;
+        for (attempt, addr) in addresses.into_iter().take(3).enumerate() {
+            pool_log(&format!("websocket connect attempt={} target={addr}", attempt + 1));
+            let attempt_result = timeout(self.connect_timeout, async {
+                let tcp = TcpStream::connect(addr).await?;
+                tcp.set_nodelay(true)?;
+                let (stream, _) =
+                    client_async_tls_with_config(request.clone(), tcp, None, None).await?;
+                Ok::<WsStream, Error>(stream)
+            })
+            .await;
+
+            match attempt_result {
+                Ok(Ok(stream)) => {
+                    *self.ws_ip_hint.lock().expect("websocket IP hint poisoned") = Some(addr);
+                    return Ok(stream);
+                }
+                Ok(Err(err)) => {
+                    pool_log(&format!("websocket IP attempt failed: {err}"));
+                    last_error = Some(err);
+                }
+                Err(_) => {
+                    pool_log("websocket IP attempt timed out");
+                    last_error = Some(Error::UnexpectedResponse("websocket connect timeout"));
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or(Error::UnexpectedResponse(
+            "websocket connection failed for all available IP addresses",
+        )))
     }
 }
 
