@@ -75,6 +75,22 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("stable") {
+            val keystorePath = System.getenv("EDGE_TTS_KEYSTORE_PATH")
+            val storePass = System.getenv("EDGE_TTS_STORE_PASSWORD")
+            val keyAliasValue = System.getenv("EDGE_TTS_KEY_ALIAS")
+            val keyPass = System.getenv("EDGE_TTS_KEY_PASSWORD")
+            if (!keystorePath.isNullOrBlank() && !storePass.isNullOrBlank() &&
+                !keyAliasValue.isNullOrBlank() && !keyPass.isNullOrBlank()) {
+                storeFile = file(keystorePath)
+                storePassword = storePass
+                keyAlias = keyAliasValue
+                keyPassword = keyPass
+            }
+        }
+    }
+
     buildTypes {
         debug {
             ndk {
