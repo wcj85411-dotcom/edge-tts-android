@@ -27,7 +27,6 @@ public final class VoicePickerActivity extends AppCompatActivity {
     public static final String EXTRA_RESULT_VOICE_SHORT_NAME = "result_voice_short_name";
 
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
-
     private TextView statusView;
     private TextInputEditText searchEditText;
     private ListView voiceListView;
@@ -41,7 +40,6 @@ public final class VoicePickerActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_voice_picker);
-
         voiceRepository = VoiceRepository.getInstance(this);
         initialVoiceShortName = getIntent().getStringExtra(EXTRA_INITIAL_VOICE_SHORT_NAME);
 
@@ -50,19 +48,20 @@ public final class VoicePickerActivity extends AppCompatActivity {
         searchEditText = findViewById(R.id.searchEditText);
         voiceListView = findViewById(R.id.voiceListView);
         MaterialButton refreshButton = findViewById(R.id.refreshVoicesButton);
-
         toolbar.setNavigationOnClickListener(view -> finish());
 
-        adapter = new ArrayAdapter<VoiceInfo>(this, android.R.layout.simple_list_item_2, android.R.id.text1, filteredVoices) {
+        adapter = new ArrayAdapter<VoiceInfo>(this, android.R.layout.simple_list_item_2,
+                android.R.id.text1, filteredVoices) {
             @Override
-            public android.view.View getView(int position, android.view.View convertView, android.view.ViewGroup parent) {
+            public android.view.View getView(int position, android.view.View convertView,
+                                             android.view.ViewGroup parent) {
                 android.view.View view = super.getView(position, convertView, parent);
                 TextView title = view.findViewById(android.R.id.text1);
                 TextView subtitle = view.findViewById(android.R.id.text2);
                 VoiceInfo voice = getItem(position);
                 if (voice != null) {
-                    title.setText(voice.getFriendlyName().isEmpty() ? voice.getShortName() : voice.getFriendlyName());
-                    subtitle.setText(voice.getShortName() + " • " + voice.getLocaleTag() + " • " + voice.getGender());
+                    title.setText(voice.getDisplayName());
+                    subtitle.setText("引擎标识：" + voice.getShortName());
                     title.setSingleLine(false);
                     subtitle.setSingleLine(false);
                 }
@@ -79,20 +78,12 @@ public final class VoicePickerActivity extends AppCompatActivity {
         });
 
         searchEditText.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-            }
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
                 filterVoices(s == null ? "" : s.toString());
             }
-
-            @Override
-            public void afterTextChanged(Editable s) {
-            }
+            @Override public void afterTextChanged(Editable s) { }
         });
-
         refreshButton.setOnClickListener(view -> loadVoices(true));
         loadVoices(false);
     }
@@ -108,16 +99,15 @@ public final class VoicePickerActivity extends AppCompatActivity {
         executorService.execute(() -> {
             try {
                 List<VoiceInfo> loadedVoices = voiceRepository.loadVoices(forceRefresh);
-                runOnUiThread(() -> bindVoices(loadedVoices, forceRefresh));
+                runOnUiThread(() -> bindVoices(loadedVoices));
             } catch (IOException exception) {
-                runOnUiThread(() -> setStatus(
-                        getString(R.string.status_error_format, exception.getMessage())
-                ));
+                runOnUiThread(() -> setStatus(getString(
+                        R.string.status_error_format, exception.getMessage())));
             }
         });
     }
 
-    private void bindVoices(List<VoiceInfo> loadedVoices, boolean forceRefresh) {
+    private void bindVoices(List<VoiceInfo> loadedVoices) {
         voices.clear();
         voices.addAll(loadedVoices);
         filterVoices(searchEditText.getText() == null ? "" : searchEditText.getText().toString());
@@ -128,9 +118,7 @@ public final class VoicePickerActivity extends AppCompatActivity {
         filteredVoices.clear();
         String normalized = query.trim().toLowerCase(Locale.US);
         for (VoiceInfo voice : voices) {
-            if (normalized.isEmpty() || voice.matchesQuery(normalized)) {
-                filteredVoices.add(voice);
-            }
+            if (normalized.isEmpty() || voice.matchesQuery(normalized)) filteredVoices.add(voice);
         }
         adapter.notifyDataSetChanged();
         if (filteredVoices.isEmpty()) {
