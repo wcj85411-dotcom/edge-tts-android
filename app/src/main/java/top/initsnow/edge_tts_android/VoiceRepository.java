@@ -197,7 +197,7 @@ public final class VoiceRepository {
             List<VoiceInfo> voices = new ArrayList<>(array.length());
             for (int index = 0; index < array.length(); index++) {
                 VoiceInfo voice = VoiceInfo.fromJson(array.getJSONObject(index));
-                if (voice.isChineseVoice()) voices.add(voice);
+                if (isSupportedNovelVoice(voice)) voices.add(voice);
             }
             voices.sort(Comparator
                     .comparing(VoiceInfo::getLocaleTag)
