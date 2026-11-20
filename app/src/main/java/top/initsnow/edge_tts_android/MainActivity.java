@@ -505,7 +505,14 @@ public final class MainActivity extends AppCompatActivity {
     private void bindSelectedVoice(String shortName) {
         VoiceInfo selected = voiceRepository.findByShortName(voices, shortName);
         if (selected == null) {
-            selectedVoiceEditText.setText(R.string.voice_not_selected);
+            // Keep the selected voice visible even if the main screen's voice
+            // catalogue has not loaded yet or a refresh temporarily failed.
+            // The short name is also the exact identifier used by the TTS engine.
+            selectedVoiceEditText.setText(
+                    shortName == null || shortName.isEmpty()
+                            ? getString(R.string.voice_not_selected)
+                            : shortName
+            );
             return;
         }
         selectedVoiceEditText.setText(selected.getDisplayName());
