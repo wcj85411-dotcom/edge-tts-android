@@ -8,8 +8,6 @@ import java.util.Properties
 
 val rustTargets = mapOf(
     "arm64-v8a" to "aarch64-linux-android",
-    "armeabi-v7a" to "armv7-linux-androideabi",
-    "x86_64" to "x86_64-linux-android",
 )
 
 val rustLibOutputDir = layout.buildDirectory.dir("rustJniLibs")
@@ -170,7 +168,6 @@ val downloadBeatriceLibs by tasks.registering {
 val rustBuildJniLibs by tasks.registering {
     group = "build"
     description = "Build Rust JNI libraries for all supported Android ABIs."
-    dependsOn(downloadBeatriceLibs)
     outputs.dir(rustLibOutputDir)
 
     doLast {
