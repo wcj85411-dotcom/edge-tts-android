@@ -234,11 +234,53 @@ pub fn ssml_message(options: &SpeakOptions, chunk: &str) -> Result<String> {
     ))
 }
 
+fn language_tag_from_voice(voice: &str) -> &str {
+    let mut parts = voice.split('-');
+    let language = parts.next().unwrap_or("");
+    let region = parts.next().unwrap_or("");
+    if (language.len() == 2 || language.len() == 3)
+        && language.bytes().all(|b| b.is_ascii_alphabetic())
+        && (region.len() == 2 || region.len() == 3)
+        && region.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        // Edge voice short names begin with the BCP-47 language and region,
+        // e.g. zh-CN-XiaoxiaoNeural or en-US-AriaNeural.
+        // Return a slice of the original voice name to avoid allocating.
+        &voice[..language.len() + 1 + region.len()]
+    } else {
+        "en-US"
+    }
+}
+
 pub fn build_ssml(voice: &str, rate: &str, volume: &str, pitch: &str, text: &str) -> String {
+    let language_tag = language_tag_from_voice(voice);
     format!(
-        "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='{voice}'><prosody pitch='{pitch}' rate='{rate}' volume='{volume}'>{}</prosody></voice></speak>",
+        "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{language_tag}'><voice name='{voice}'><prosody pitch='{pitch}' rate='{rate}' volume='{volume}'>{}</prosody></voice></speak>",
         escape_ssml_text(text)
     )
+}
+
+#[cfg(test)]
+mod ssml_language_tests {
+    use super::build_ssml;
+
+    #[test]
+    fn ssml_uses_chinese_voice_language() {
+        let ssml = build_ssml("zh-CN-XiaoyiNeural", "+0%", "+0%", "+0Hz", "地区");
+        assert!(ssml.contains("xml:lang='zh-CN'"));
+    }
+
+    #[test]
+    fn ssml_uses_selected_voice_region() {
+        let ssml = build_ssml("en-GB-SoniaNeural", "+0%", "+0%", "+0Hz", "hello");
+        assert!(ssml.contains("xml:lang='en-GB'"));
+    }
+
+    #[test]
+    fn ssml_keeps_safe_fallback_for_unrecognized_voice_name() {
+        let ssml = build_ssml("UnknownVoice", "+0%", "+0%", "+0Hz", "text");
+        assert!(ssml.contains("xml:lang='en-US'"));
+    }
 }
 
 pub fn escape_ssml_text(text: &str) -> String {
