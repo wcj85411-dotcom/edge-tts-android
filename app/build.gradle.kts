@@ -2,8 +2,6 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
-import java.net.HttpURLConnection
-import java.net.URI
 import java.util.Properties
 
 val rustTargets = mapOf(
@@ -115,52 +113,6 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = false
-        }
-    }
-}
-
-val downloadBeatriceLibs by tasks.registering {
-    group = "build"
-    description = "Downloads native Beatrice static libraries if missing."
-
-    val targetUrls = mapOf(
-        "aarch64-linux-android" to "https://huggingface.co/GokRack/beatrice-api-for-android/resolve/rc.0/arm64-v8a/libbeatrice.a",
-        "x86_64-linux-android" to "https://huggingface.co/GokRack/beatrice-api-for-android/resolve/rc.0/x86_64/libbeatrice.a",
-    )
-
-    doLast {
-        targetUrls.forEach { (target, urlString) ->
-            val libDir = rustProjectDir.resolve("lib").resolve(target)
-            val libFile = libDir.resolve("libbeatrice.a")
-            if (!libFile.exists()) {
-                libDir.mkdirs()
-                logger.lifecycle("Downloading Beatrice static library for $target...")
-                var currentUrl = urlString
-                var conn: HttpURLConnection
-                while (true) {
-                    val url = URI(currentUrl).toURL()
-                    conn = url.openConnection() as HttpURLConnection
-                    conn.instanceFollowRedirects = true
-                    val code = conn.responseCode
-                    if (code == HttpURLConnection.HTTP_MOVED_TEMP
-                        || code == HttpURLConnection.HTTP_MOVED_PERM
-                        || code == 307
-                        || code == 308
-                    ) {
-                        currentUrl = conn.getHeaderField("Location")
-                        conn.disconnect()
-                        continue
-                    }
-                    break
-                }
-                conn.inputStream.use { input ->
-                    libFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                conn.disconnect()
-                logger.lifecycle("Downloaded Beatrice static library: ${libFile.absolutePath}")
-            }
         }
     }
 }
