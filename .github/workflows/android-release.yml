@@ -42,6 +42,25 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
+      - name: Configure stable APK signing
+        env:
+          EDGE_TTS_KEYSTORE_BASE64: ${{ secrets.EDGE_TTS_KEYSTORE_BASE64 }}
+          EDGE_TTS_STORE_PASSWORD: ${{ secrets.EDGE_TTS_STORE_PASSWORD }}
+          EDGE_TTS_KEY_ALIAS: ${{ secrets.EDGE_TTS_KEY_ALIAS }}
+          EDGE_TTS_KEY_PASSWORD: ${{ secrets.EDGE_TTS_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$EDGE_TTS_KEYSTORE_BASE64" || { echo "Missing EDGE_TTS_KEYSTORE_BASE64 repository secret"; exit 1; }
+          test -n "$EDGE_TTS_STORE_PASSWORD" || { echo "Missing EDGE_TTS_STORE_PASSWORD repository secret"; exit 1; }
+          test -n "$EDGE_TTS_KEY_ALIAS" || { echo "Missing EDGE_TTS_KEY_ALIAS repository secret"; exit 1; }
+          test -n "$EDGE_TTS_KEY_PASSWORD" || { echo "Missing EDGE_TTS_KEY_PASSWORD repository secret"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/edge-tts-signing"
+          echo "$EDGE_TTS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/edge-tts-signing/release.jks"
+          echo "EDGE_TTS_KEYSTORE_PATH=$RUNNER_TEMP/edge-tts-signing/release.jks" >> "$GITHUB_ENV"
+          echo "EDGE_TTS_STORE_PASSWORD=$EDGE_TTS_STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "EDGE_TTS_KEY_ALIAS=$EDGE_TTS_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "EDGE_TTS_KEY_PASSWORD=$EDGE_TTS_KEY_PASSWORD" >> "$GITHUB_ENV"
+
       - name: Build ARM64 debug APK
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/30.0.14904198
