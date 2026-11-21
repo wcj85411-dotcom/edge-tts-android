@@ -9,15 +9,18 @@ import android.os.Bundle;
 import android.content.pm.PackageManager;
 
 /**
- * Narrow IPC endpoint used by the companion Legado test build to request
- * one upcoming paragraph be synthesized while the current paragraph plays.
+ * Narrow IPC endpoint used by the companion reader to request one upcoming
+ * paragraph be synthesized while the current paragraph plays.
  */
 public final class EdgeTtsPrefetchProvider extends ContentProvider {
     private static final String[] ALLOWED_CALLERS = {
             "io.legado.app.voicebeta.debug",
             "io.legado.app.voicebeta.release",
-            "io.legado.app.voicebeta"
+            "io.legado.app.voicebeta",
+            "com.legado.app.debug",
+            "com.legado.app.release"
     };
+    private static final int MAX_PREFETCH_TEXT_CHARS = 6000;
 
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
@@ -47,6 +50,11 @@ public final class EdgeTtsPrefetchProvider extends ContentProvider {
         }
 
         String text = extras == null ? null : extras.getString("text");
+        if (text == null || text.trim().isEmpty() || text.length() > MAX_PREFETCH_TEXT_CHARS) {
+            result.putBoolean("accepted", false);
+            return result;
+        }
+
         PrefetchManager.SynthesisConfig config = PrefetchManager.getLastConfig();
         result.putBoolean("accepted", PrefetchManager.prefetch(text, config));
         return result;
