@@ -8,6 +8,7 @@ on:
       - voice-gap-pool-experiment
       - voice-parallel-prefetch-prototype
       - personal-reader-integration
+      - polyphone-emotion-lab
 
 permissions:
   contents: read
@@ -43,6 +44,9 @@ jobs:
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
+
+      - name: Run JVM unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
 
       - name: Build ARM64 debug APK
         env:
