@@ -69,7 +69,9 @@ final class SpeechTextNormalizer {
                 if (cursor + word.length() <= to && source.startsWith(word, cursor)
                         && (match == null || word.length() > match.length())) {
                     match = word;
-                    replacement = word.substring(0, word.length() - 1) + "帝";
+                    replacement = word.startsWith("地")
+                            ? "帝" + word.substring(1)
+                            : word.substring(0, word.length() - 1) + "帝";
                 }
             }
             for (String phrase : DE_PARTICLE_PHRASES) {
