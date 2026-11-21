@@ -10,6 +10,10 @@ import android.speech.tts.TextToSpeechService;
 import android.speech.tts.Voice;
 import android.util.Log;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -191,7 +195,10 @@ public final class EdgeTtsService extends TextToSpeechService {
                     byte[] chunk = firstPrefetchedChunk;
                     int totalPrefetchedBytes = 0;
                     while (chunk != null) {
-                        int audioStatus = callback.audioAvailable(chunk, 0, chunk.length);
+                        boundarySearchFrom = dispatchWordBoundaries(
+                        requestId, text, callback, boundarySearchFrom
+                );
+                int audioStatus = callback.audioAvailable(chunk, 0, chunk.length);
                         if (audioStatus != TextToSpeech.SUCCESS) {
                             prefetchedStream.cancel();
                             callback.error(TextToSpeech.ERROR_OUTPUT);
@@ -265,6 +272,7 @@ public final class EdgeTtsService extends TextToSpeechService {
             }
 
             int maxBufferSize = Math.max(callback.getMaxBufferSize(), 8192);
+            int boundarySearchFrom = 0;
             boolean firstChunkReadLogged = false;
             boolean firstAudioAvailableLogged = false;
             while (true) {
@@ -296,6 +304,10 @@ public final class EdgeTtsService extends TextToSpeechService {
                 }
             }
 
+            boundarySearchFrom = dispatchWordBoundaries(
+                    requestId, text, callback, boundarySearchFrom
+            );
+
             String streamError = EdgeTtsNative.getLastError(requestId);
             if (streamError != null && !streamError.isEmpty()) {
                 Log.e(TAG, "request=" + requestId + " stream error: " + streamError);
@@ -316,6 +328,47 @@ public final class EdgeTtsService extends TextToSpeechService {
         } finally {
             EdgeTtsNative.stop(requestId);
             currentRequestId.compareAndSet(requestId, null);
+        }
+    }
+
+    /**
+     * Forward Edge word timings to Android TTS clients. Edge timestamps use
+     * 100-nanosecond ticks; the PCM stream exposed by this engine is 48 kHz.
+     * Matching is monotonic and UTF-16 based, as required by rangeStart().
+     */
+    private int dispatchWordBoundaries(
+            String requestId,
+            String sourceText,
+            SynthesisCallback callback,
+            int searchFrom
+    ) {
+        if (android.os.Build.VERSION.SDK_INT < 26) return searchFrom;
+        String json = EdgeTtsNative.readBoundaryEvents(requestId, 256);
+        if (json == null || json.isEmpty() || json.charAt(0) == 'E') return searchFrom;
+        try {
+            JSONArray events = new JSONArray(json);
+            int cursor = searchFrom;
+            for (int i = 0; i < events.length(); i++) {
+                JSONObject event = events.optJSONObject(i);
+                if (event == null || !"Word".equals(event.optString("kind"))) continue;
+                String word = event.optString("text", "");
+                if (word.isEmpty()) continue;
+                int start = sourceText.indexOf(word, cursor);
+                if (start < 0) {
+                    Log.d(TAG, "Skip unmatched Edge word boundary: " + word);
+                    continue;
+                }
+                int end = start + word.length();
+                long ticks = Math.max(0L, event.optLong("offset_ticks", 0L));
+                long frameLong = Math.round(ticks * (SAMPLE_RATE_HZ / 10_000_000.0));
+                int frame = (int) Math.min(Integer.MAX_VALUE, frameLong);
+                callback.rangeStart(start, end, frame);
+                cursor = end;
+            }
+            return cursor;
+        } catch (JSONException exception) {
+            Log.w(TAG, "Invalid native boundary event JSON", exception);
+            return searchFrom;
         }
     }
 
