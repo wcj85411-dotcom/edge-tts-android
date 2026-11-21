@@ -119,7 +119,7 @@ final class SpeechTextNormalizer {
             }
             for (String[] phrase : POLYPHONE_PHRASES) {
                 if (cursor + phrase[0].length() <= to && source.startsWith(phrase[0], cursor)
-                        && (match == null || phrase[0].length() > match.length())) {
+                        && (match == null || phrase[0].length() >= match.length())) {
                     match = phrase[0];
                     replacement = phrase[1];
                 }
