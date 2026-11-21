@@ -10,7 +10,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Instant;
 
-use edge_tts_rust::{Boundary, EdgeTtsClient, SpeakOptions, SynthesisEvent};
+use edge_tts_rust::{Boundary, BoundaryEvent, EdgeTtsClient, SpeakOptions, SynthesisEvent};
 use futures_util::StreamExt;
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JString};
@@ -84,6 +84,7 @@ struct AudioBuffer {
 struct SynthesisSession {
     pcm_state: Mutex<PcmState>,
     pcm_condvar: Condvar,
+    boundary_events: Mutex<VecDeque<BoundaryEvent>>,
     stopped: Arc<AtomicBool>,
 }
 
@@ -243,8 +244,19 @@ impl SynthesisSession {
                 error: None,
             }),
             pcm_condvar: Condvar::new(),
+            boundary_events: Mutex::new(VecDeque::new()),
             stopped: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    fn push_boundary(&self, event: BoundaryEvent) {
+        self.boundary_events.lock().expect("boundary queue poisoned").push_back(event);
+    }
+
+    fn drain_boundaries(&self, max_events: usize) -> Vec<BoundaryEvent> {
+        let mut queue = self.boundary_events.lock().expect("boundary queue poisoned");
+        let count = max_events.max(1).min(queue.len());
+        queue.drain(..count).collect()
     }
 
     fn push_pcm(&self, bytes: &[u8]) {
@@ -739,7 +751,7 @@ fn spawn_synthesis_worker(
                         }
                         network_buffer.push(&chunk)
                     }
-                    SynthesisEvent::Boundary(_) => {}
+                    SynthesisEvent::Boundary(event) => network_session.push_boundary(event)
                 }
             }
 
@@ -1037,6 +1049,25 @@ pub extern "system" fn Java_top_initsnow_edge_1tts_1android_EdgeTtsNative_native
     env.byte_array_from_slice(&bytes)
         .map(JByteArray::into_raw)
         .unwrap_or(null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_top_initsnow_edge_1tts_1android_EdgeTtsNative_nativeReadBoundaryEvents(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    request_id: JString<'_>,
+    max_events: i32,
+) -> jstring {
+    let request_id = match read_java_string(&mut env, request_id) {
+        Ok(value) => value,
+        Err(error) => return into_java_string(&mut env, Some(format!("ERROR: {error}"))),
+    };
+    let Some(session) = session(&request_id) else {
+        return into_java_string(&mut env, Some("[]".to_string()));
+    };
+    let events = session.drain_boundaries(max_events.max(1) as usize);
+    let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
+    into_java_string(&mut env, Some(json))
 }
 
 #[unsafe(no_mangle)]
