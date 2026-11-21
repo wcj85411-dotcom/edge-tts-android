@@ -76,6 +76,16 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("EDGE_TTS_KEYSTORE_PATH")
+            storeFile = keystorePath?.let { file(it) }
+            storePassword = System.getenv("EDGE_TTS_STORE_PASSWORD")
+            keyAlias = System.getenv("EDGE_TTS_KEY_ALIAS")
+            keyPassword = System.getenv("EDGE_TTS_KEY_PASSWORD")
+        }
+    }
+
     buildTypes {
         debug {
             ndk {
@@ -83,6 +93,7 @@ android {
             }
         }
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
