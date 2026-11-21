@@ -52,7 +52,7 @@ pub struct Voice {
     pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BoundaryEvent {
     pub kind: Boundary,
     pub offset_ticks: u64,
