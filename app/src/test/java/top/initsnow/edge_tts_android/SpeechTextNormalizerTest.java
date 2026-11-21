@@ -16,6 +16,8 @@ public class SpeechTextNormalizerTest {
     @Test public void distinguishesCalendarYearsFromDurations() {
         assertEquals("公元二零零零年", SpeechTextNormalizer.normalize("公元2000年").getText());
         assertEquals("在二零零零年", SpeechTextNormalizer.normalize("在2000年").getText());
+        assertEquals("二零零零年代", SpeechTextNormalizer.normalize("2000年代").getText());
+        assertEquals("版本3.14保持不变", SpeechTextNormalizer.normalize("版本3.14保持不变").getText());
         assertEquals("不到两千年的时间", SpeechTextNormalizer.normalize("不到2000年的时间").getText());
         assertEquals("两千多年前", SpeechTextNormalizer.normalize("2000多年前").getText());
         assertEquals("第二零零零号文件", SpeechTextNormalizer.normalize("第2000号文件").getText());
