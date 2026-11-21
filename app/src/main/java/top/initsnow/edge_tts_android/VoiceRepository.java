@@ -70,11 +70,42 @@ public final class VoiceRepository {
                         EdgeTtsNative.getLoadError()
                 ));
             }
-            try {
-                String json = EdgeTtsNative.listVoicesJson();
-                if (json.startsWith("ERROR:")) {
-                    throw new IOException(json.substring("ERROR:".length()).trim());
+            String json = null;
+            IOException fetchError = null;
+            // A reset connection can be transient (especially on VPN/mobile routes).
+            // Retry briefly, then keep the last known-good Chinese voice list if available.
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    String response = EdgeTtsNative.listVoicesJson();
+                    if (response.startsWith("ERROR:")) {
+                        throw new IOException(response.substring("ERROR:".length()).trim());
+                    }
+                    json = response;
+                    fetchError = null;
+                    break;
+                } catch (IOException exception) {
+                    fetchError = exception;
+                    if (attempt < 2) {
+                        try {
+                            Thread.sleep(attempt == 0 ? 300L : 700L);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException("voice list request interrupted", interrupted);
+                        }
+                    }
                 }
+            }
+
+            if (json == null) {
+                List<VoiceInfo> storedVoices = loadStoredVoices();
+                if (!storedVoices.isEmpty()) {
+                    updateCache(storedVoices);
+                    return cachedVoices;
+                }
+                throw fetchError != null ? fetchError : new IOException("voice list request failed");
+            }
+
+            try {
                 JSONArray array = new JSONArray(json);
                 List<VoiceInfo> voices = new ArrayList<>(array.length());
                 for (int index = 0; index < array.length(); index++) {
