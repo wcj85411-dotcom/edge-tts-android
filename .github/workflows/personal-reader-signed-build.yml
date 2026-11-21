@@ -65,8 +65,6 @@ jobs:
       - name: Verify original signing certificate
         working-directory: reader
         env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-        env:
           EXPECTED_CERT_SHA256: 1CB922D40016E2EF44F1A023F2748EE592CF277A63C99CBC8D01FF470478E2AD
         run: |
           set -euo pipefail
