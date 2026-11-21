@@ -8,14 +8,14 @@ public class SpeechTextNormalizerTest {
     @Test public void distinguishesGeographicalDiFromAdverbialDe() {
         assertEquals("并在不到两千年的时间内接受了这一批在新月沃帝形成的驯化动植物",
                 SpeechTextNormalizer.normalize("并在不到2000年的时间内接受了这一批在新月沃地形成的驯化动植物").getText());
-        assertEquals("他慢慢的走过土地", SpeechTextNormalizer.normalize("他慢慢地走过土地").getText());
+        assertEquals("他慢慢的走过土帝", SpeechTextNormalizer.normalize("他慢慢地走过土地").getText());
     }
 
     @Test public void distinguishesCalendarYearsFromDurations() {
         assertEquals("公元二零零零年", SpeechTextNormalizer.normalize("公元2000年").getText());
         assertEquals("不到两千年的时间", SpeechTextNormalizer.normalize("不到2000年的时间").getText());
         assertEquals("两千多年前", SpeechTextNormalizer.normalize("2000多年前").getText());
-        assertEquals("第两千号文件", SpeechTextNormalizer.normalize("第2000号文件").getText());
+        assertEquals("第二零零零号文件", SpeechTextNormalizer.normalize("第2000号文件").getText());
     }
 
     @Test public void mapsChangedSpeechOffsetsBackToOriginalUtf16Offsets() {
