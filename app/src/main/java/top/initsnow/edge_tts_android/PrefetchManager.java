@@ -2,20 +2,31 @@ package top.initsnow.edge_tts_android;
 
 import android.util.Log;
 
-import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Keeps at most one upcoming utterance synthesized ahead of playback.
- * Audio is held in memory only and discarded when consumed or playback stops.
+ * Streams one upcoming utterance ahead of playback.
+ *
+ * Unlike the old implementation, this does not wait for the whole paragraph
+ * to be synthesized before making audio available. A bounded queue provides
+ * back-pressure and caps queued PCM at approximately 3 MiB per utterance.
  */
 final class PrefetchManager {
     private static final String TAG = "EdgeTtsPrefetch";
-    private static final int MAX_PCM_BYTES = 3 * 1024 * 1024;
     private static final int READ_CHUNK_BYTES = 32 * 1024;
+    private static final int MAX_QUEUED_CHUNKS = 96;
+    private static final int MAX_PENDING_REQUESTS = 2;
     private static final Object LOCK = new Object();
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "EdgeTts-Prefetch");
@@ -23,10 +34,8 @@ final class PrefetchManager {
         return thread;
     });
 
-    private static CachedAudio cachedAudio;
-    private static String activeKey;
-    private static String activeRequestId;
-    private static Future<?> activeFuture;
+    private static final Map<String, PrefetchStream> PENDING = new LinkedHashMap<>();
+    private static final Set<PrefetchStream> ALL_STREAMS = new LinkedHashSet<>();
     private static volatile SynthesisConfig lastConfig;
 
     private PrefetchManager() {
@@ -50,13 +59,82 @@ final class PrefetchManager {
         }
     }
 
-    private static final class CachedAudio {
-        final String key;
+    private static final class AudioChunk {
+        static final AudioChunk END = new AudioChunk(null, null);
         final byte[] pcm;
+        final String error;
 
-        CachedAudio(String key, byte[] pcm) {
-            this.key = key;
+        AudioChunk(byte[] pcm, String error) {
             this.pcm = pcm;
+            this.error = error;
+        }
+    }
+
+    static final class PrefetchStream {
+        private final String key;
+        private final ArrayBlockingQueue<AudioChunk> queue =
+                new ArrayBlockingQueue<>(MAX_QUEUED_CHUNKS);
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
+        private final AtomicBoolean terminalQueued = new AtomicBoolean(false);
+        private volatile Future<?> future;
+        private volatile String requestId;
+
+        private PrefetchStream(String key) {
+            this.key = key;
+        }
+
+        private boolean offer(byte[] pcm) {
+            if (cancelled.get()) return false;
+            try {
+                queue.put(new AudioChunk(pcm, null));
+                return !cancelled.get();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+
+        private void finish(String error) {
+            if (!terminalQueued.compareAndSet(false, true)) return;
+            try {
+                queue.put(error == null || error.isEmpty()
+                        ? AudioChunk.END
+                        : new AudioChunk(null, error));
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                queue.clear();
+                queue.offer(AudioChunk.END);
+            }
+        }
+
+        byte[] readNext() throws IOException {
+            final AudioChunk item;
+            try {
+                item = queue.take();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting for prefetched audio", interrupted);
+            }
+            if (item == AudioChunk.END) {
+                release(this);
+                return null;
+            }
+            if (item.error != null) {
+                release(this);
+                throw new IOException(item.error);
+            }
+            return item.pcm;
+        }
+
+        void cancel() {
+            if (!cancelled.compareAndSet(false, true)) return;
+            Future<?> task = future;
+            if (task != null) task.cancel(true);
+            String id = requestId;
+            if (id != null) EdgeTtsNative.stop(id);
+            queue.clear();
+            queue.offer(AudioChunk.END);
+            release(this);
         }
     }
 
@@ -70,137 +148,91 @@ final class PrefetchManager {
 
     static boolean prefetch(String text, SynthesisConfig config) {
         if (text == null || text.trim().isEmpty() || config == null) return false;
-        final String key = config.key(text);
+        String key = config.key(text);
         synchronized (LOCK) {
-            if (cachedAudio != null && cachedAudio.key.equals(key)) return true;
-            if (key.equals(activeKey)) return true;
-            // One bounded prefetch at a time. Never accumulate an entire chapter.
-            if (activeKey != null) return false;
-            activeKey = key;
-            activeFuture = EXECUTOR.submit(() -> synthesizeAhead(key, text, config));
+            if (PENDING.containsKey(key)) return true;
+            if (PENDING.size() >= MAX_PENDING_REQUESTS) return false;
+            PrefetchStream stream = new PrefetchStream(key);
+            PENDING.put(key, stream);
+            ALL_STREAMS.add(stream);
+            stream.future = EXECUTOR.submit(() -> synthesizeAhead(stream, text, config));
+            Log.i(TAG, "Queued streaming prefetch chars=" + text.length()
+                    + " pending=" + PENDING.size());
             return true;
         }
     }
 
-    static byte[] take(String text, String voice, String rate, String volume, String pitch, long waitMs) {
-        SynthesisConfig config = new SynthesisConfig(voice, rate, volume, pitch);
-        String key = config.key(text);
-        long deadline = android.os.SystemClock.elapsedRealtime() + Math.max(0, waitMs);
-        String cancelRequestId = null;
-
+    static PrefetchStream take(String text, String voice, String rate, String volume, String pitch) {
+        String key = new SynthesisConfig(voice, rate, volume, pitch).key(text);
         synchronized (LOCK) {
-            while ((cachedAudio == null || !cachedAudio.key.equals(key))
-                    && key.equals(activeKey)
-                    && android.os.SystemClock.elapsedRealtime() < deadline) {
-                long remaining = deadline - android.os.SystemClock.elapsedRealtime();
-                try {
-                    LOCK.wait(Math.max(1, remaining));
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
+            PrefetchStream stream = PENDING.remove(key);
+            if (stream != null) {
+                Log.i(TAG, "Streaming prefetch claimed");
+            } else {
+                Log.i(TAG, "Streaming prefetch miss");
             }
-
-            if (cachedAudio != null && cachedAudio.key.equals(key)) {
-                byte[] pcm = cachedAudio.pcm;
-                cachedAudio = null;
-                LOCK.notifyAll();
-                return pcm;
-            }
-
-            if (key.equals(activeKey)) {
-                cancelRequestId = activeRequestId;
-                if (activeFuture != null) activeFuture.cancel(true);
-                activeFuture = null;
-                activeRequestId = null;
-                activeKey = null;
-                LOCK.notifyAll();
-            }
+            return stream;
         }
-
-        if (cancelRequestId != null) {
-            EdgeTtsNative.stop(cancelRequestId);
-        }
-        return null;
     }
 
     static void cancelAll() {
-        String requestId;
+        ArrayList<PrefetchStream> streams;
         synchronized (LOCK) {
-            requestId = activeRequestId;
-            if (activeFuture != null) activeFuture.cancel(true);
-            activeFuture = null;
-            activeRequestId = null;
-            activeKey = null;
-            cachedAudio = null;
-            LOCK.notifyAll();
+            streams = new ArrayList<>(ALL_STREAMS);
+            PENDING.clear();
         }
-        if (requestId != null) {
-            EdgeTtsNative.stop(requestId);
+        for (PrefetchStream stream : streams) {
+            stream.cancel();
+        }
+        Log.i(TAG, "Cancelled all prefetch streams count=" + streams.size());
+    }
+
+    private static void release(PrefetchStream stream) {
+        synchronized (LOCK) {
+            PENDING.remove(stream.key, stream);
+            ALL_STREAMS.remove(stream);
         }
     }
 
-    private static void synthesizeAhead(String key, String text, SynthesisConfig config) {
+    private static void synthesizeAhead(
+            PrefetchStream stream,
+            String text,
+            SynthesisConfig config
+    ) {
         String requestId = "prefetch-" + UUID.randomUUID();
-        boolean registered = false;
+        stream.requestId = requestId;
+        long startedAt = android.os.SystemClock.elapsedRealtime();
+        int totalBytes = 0;
         try {
-            synchronized (LOCK) {
-                if (!key.equals(activeKey)) return;
-                activeRequestId = requestId;
-                registered = true;
-            }
-
             String beginError = EdgeTtsNative.beginSynthesis(
                     requestId, text, config.voice, config.rate, config.volume, config.pitch
             );
             if (beginError != null && !beginError.isEmpty()) {
-                Log.w(TAG, "Background synthesis could not start: " + beginError);
+                stream.finish(beginError);
                 return;
             }
 
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            boolean tooLarge = false;
-            while (!Thread.currentThread().isInterrupted()) {
+            while (!Thread.currentThread().isInterrupted() && !stream.cancelled.get()) {
                 byte[] chunk = EdgeTtsNative.readPcmChunk(requestId, READ_CHUNK_BYTES);
                 if (chunk == null || chunk.length == 0) break;
-                if (output.size() + chunk.length > MAX_PCM_BYTES) {
-                    tooLarge = true;
-                    break;
-                }
-                output.write(chunk, 0, chunk.length);
+                if (!stream.offer(chunk)) return;
+                totalBytes += chunk.length;
             }
 
-            if (tooLarge) {
-                Log.i(TAG, "Prefetch discarded: audio exceeded memory limit");
-                return;
-            }
-
+            if (stream.cancelled.get() || Thread.currentThread().isInterrupted()) return;
             String streamError = EdgeTtsNative.getLastError(requestId);
-            byte[] pcm = output.toByteArray();
-            if (streamError != null && !streamError.isEmpty()) {
-                Log.w(TAG, "Background synthesis failed: " + streamError);
-                return;
-            }
-            if (pcm.length == 0 || Thread.currentThread().isInterrupted()) return;
-
-            synchronized (LOCK) {
-                if (key.equals(activeKey) && !Thread.currentThread().isInterrupted()) {
-                    cachedAudio = new CachedAudio(key, pcm);
-                    Log.i(TAG, "Prefetched next utterance: " + pcm.length + " PCM bytes");
-                }
-            }
+            stream.finish(streamError);
+            Log.i(TAG, "Prefetch stream finished bytes=" + totalBytes
+                    + " elapsedMs="
+                    + (android.os.SystemClock.elapsedRealtime() - startedAt));
         } catch (Exception exception) {
-            Log.w(TAG, "Background synthesis failed", exception);
+            Log.w(TAG, "Background streaming synthesis failed", exception);
+            stream.finish(exception.getMessage() == null
+                    ? exception.getClass().getSimpleName()
+                    : exception.getMessage());
         } finally {
-            if (registered) EdgeTtsNative.stop(requestId);
-            synchronized (LOCK) {
-                if (key.equals(activeKey)) {
-                    activeRequestId = null;
-                    activeFuture = null;
-                    activeKey = null;
-                }
-                LOCK.notifyAll();
-            }
+            EdgeTtsNative.stop(requestId);
+            stream.requestId = null;
         }
     }
 }
