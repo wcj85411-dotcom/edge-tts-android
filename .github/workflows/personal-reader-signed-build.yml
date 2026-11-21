@@ -55,10 +55,10 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/edge-tts-release.jks"
           test -s "$RUNNER_TEMP/edge-tts-release.jks"
           {
-            printf 'RELEASE_STORE_FILE=%s\\n' "$RUNNER_TEMP/edge-tts-release.jks"
-            printf 'RELEASE_STORE_PASSWORD=%s\\n' "$STORE_PASSWORD"
-            printf 'RELEASE_KEY_ALIAS=%s\\n' "$KEY_ALIAS"
-            printf 'RELEASE_KEY_PASSWORD=%s\\n' "$KEY_PASSWORD"
+            printf 'RELEASE_STORE_FILE=%s\n' "$RUNNER_TEMP/edge-tts-release.jks"
+            printf 'RELEASE_STORE_PASSWORD=%s\n' "$STORE_PASSWORD"
+            printf 'RELEASE_KEY_ALIAS=%s\n' "$KEY_ALIAS"
+            printf 'RELEASE_KEY_PASSWORD=%s\n' "$KEY_PASSWORD"
           } >> "$GITHUB_WORKSPACE/reader/gradle.properties"
 
       - name: Build signed ARM release APK
@@ -71,7 +71,6 @@ jobs:
       - name: Verify package identity and fixed signing certificate
         working-directory: reader
         env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
           EXPECTED_CERT_SHA256: 1CB922D40016E2EF44F1A023F2748EE592CF277A63C99CBC8D01FF470478E2AD
           EXPECTED_PACKAGE: com.legado.app.release
         run: |
@@ -85,7 +84,7 @@ jobs:
             echo "Signing certificate mismatch; refusing to publish an update APK."
             exit 1
           }
-          ACTUAL_PACKAGE="$(aapt dump badging "$APK" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n 1)"
+          ACTUAL_PACKAGE="$(aapt dump badging "$APK" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)"
           test "$ACTUAL_PACKAGE" = "$EXPECTED_PACKAGE" || {
             echo "Package identity mismatch: expected $EXPECTED_PACKAGE, got $ACTUAL_PACKAGE"
             exit 1
