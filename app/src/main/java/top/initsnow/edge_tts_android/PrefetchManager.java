@@ -158,15 +158,18 @@ final class PrefetchManager {
 
     static boolean prefetch(String text, SynthesisConfig config) {
         if (text == null || text.trim().isEmpty() || config == null) return false;
-        String key = config.key(text);
+        // Normalize exactly once with the same deterministic rules used by the
+        // foreground synthesis request, so prefetch keys and spoken payloads match.
+        String speechText = SpeechTextNormalizer.normalize(text).getText();
+        String key = config.key(speechText);
         synchronized (LOCK) {
             if (PENDING.containsKey(key)) return true;
             if (PENDING.size() >= MAX_PENDING_REQUESTS) return false;
             PrefetchStream stream = new PrefetchStream(key);
             PENDING.put(key, stream);
             ALL_STREAMS.add(stream);
-            stream.future = EXECUTOR.submit(() -> synthesizeAhead(stream, text, config));
-            Log.i(TAG, "Queued streaming prefetch chars=" + text.length()
+            stream.future = EXECUTOR.submit(() -> synthesizeAhead(stream, speechText, config));
+            Log.i(TAG, "Queued streaming prefetch chars=" + speechText.length()
                     + " pending=" + PENDING.size());
             return true;
         }
