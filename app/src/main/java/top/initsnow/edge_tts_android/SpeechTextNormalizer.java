@@ -190,9 +190,20 @@ final class SpeechTextNormalizer {
             List<Integer> starts, List<Integer> ends
     ) {
         out.append(value);
-        for (int i = 0; i < value.length(); i++) {
-            starts.add(sourceStart);
-            ends.add(sourceEnd);
+        if (value.length() == sourceEnd - sourceStart) {
+            // One-to-one replacements (e.g. 地 -> 帝 / 的) preserve precise
+            // per-character highlighting positions.
+            for (int i = 0; i < value.length(); i++) {
+                starts.add(sourceStart + i);
+                ends.add(sourceStart + i + 1);
+            }
+        } else {
+            // Number verbalization can change length; map the spoken token back
+            // to the complete original digit span.
+            for (int i = 0; i < value.length(); i++) {
+                starts.add(sourceStart);
+                ends.add(sourceEnd);
+            }
         }
     }
 
