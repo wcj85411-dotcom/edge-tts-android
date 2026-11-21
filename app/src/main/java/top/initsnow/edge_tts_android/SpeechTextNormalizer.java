@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
  * original text so Reader highlighting remains aligned.
  */
 final class SpeechTextNormalizer {
-    private static final Pattern NUMBER = Pattern.compile("(?<![0-9])([0-9]{1,12})(?![0-9])");
+    private static final Pattern NUMBER = Pattern.compile("(?<![0-9.,])([0-9]{1,12})(?![0-9.,])");
     private static final String[] DE_PARTICLE_PHRASES = {
             "慢慢地", "认真地", "仔细地", "轻轻地", "渐渐地",
             "静静地", "悄悄地", "快速地", "缓缓地", "坚定地", "谨慎地",
@@ -109,7 +109,20 @@ final class SpeechTextNormalizer {
                 || after.startsWith("号線") || after.startsWith("号线")) {
             return digitByDigit(digits);
         }
-        // Date-like year references with an explicit temporal preposition.
+        // Explicit duration cues take priority over a following 年.
+        if (before.endsWith("不到") || before.endsWith("超过") || before.endsWith("超過")
+                || before.endsWith("持续") || before.endsWith("持續") || before.endsWith("历时")
+                || before.endsWith("歷時") || before.endsWith("长达") || before.endsWith("長達")
+                || before.endsWith("共计") || before.endsWith("共計") || before.endsWith("累计")
+                || before.endsWith("累計") || before.endsWith("花了") || before.endsWith("用时")
+                || before.endsWith("用時") || before.endsWith("历经") || before.endsWith("歷經")) {
+            return cardinal(digits);
+        }
+        // Date-like year references with explicit calendar cues.
+        if (after.startsWith("年代") || after.startsWith("年初") || after.startsWith("年底")
+                || after.startsWith("年末") || after.startsWith("年间") || after.startsWith("年間")) {
+            return digitByDigit(digits);
+        }
         if (after.startsWith("年") && (before.endsWith("在") || before.endsWith("于")
                 || before.endsWith("於") || before.endsWith("从") || before.endsWith("從")
                 || before.endsWith("自"))) {
