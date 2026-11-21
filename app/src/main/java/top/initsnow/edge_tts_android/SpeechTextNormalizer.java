@@ -23,7 +23,7 @@ final class SpeechTextNormalizer {
     // same-pronunciation characters to guide Edge's grapheme-to-phoneme model;
     // the original display text and UTF-16 offsets remain unchanged.
     private static final String[][] POLYPHONE_PHRASES = {
-            {"仔细", "子细"},
+            {"仔细", "子细"}, {"仔细地", "子细的"},
             {"银行", "银航"}, {"行业", "航业"}, {"行情", "航情"},
             {"行列", "航列"}, {"行家", "航家"},
             {"行走", "形走"}, {"行人", "形人"}, {"行驶", "形驶"},
