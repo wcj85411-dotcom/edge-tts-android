@@ -359,6 +359,8 @@ dependencies {
     implementation(libs.material)
     implementation(libs.preference)
     testImplementation(libs.junit)
+    // Experimental only: used by local JVM tests; never packaged into the APK.
+    testImplementation("com.hankcs:hanlp:portable-1.8.6")
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
 }
