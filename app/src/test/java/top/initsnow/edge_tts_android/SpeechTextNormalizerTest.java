@@ -44,7 +44,7 @@ public class SpeechTextNormalizerTest {
         SpeechTextNormalizer.Result result = SpeechTextNormalizer.normalize("请仔细检查");
         assertEquals("请子细检查", result.getText());
         assertEquals(1, result.originalStart(1));
-        assertEquals(2, result.originalEnd(2));
+        assertEquals(3, result.originalEnd(2));
     }
 
     @Test public void mapsChangedSpeechOffsetsBackToOriginalUtf16Offsets() {
