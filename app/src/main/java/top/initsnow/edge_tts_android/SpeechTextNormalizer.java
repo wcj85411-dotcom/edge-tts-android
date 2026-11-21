@@ -110,18 +110,18 @@ final class SpeechTextNormalizer {
                             : word.substring(0, word.length() - 1) + "帝";
                 }
             }
-            for (String[] phrase : POLYPHONE_PHRASES) {
-                if (cursor + phrase[0].length() <= to && source.startsWith(phrase[0], cursor)
-                        && (match == null || phrase[0].length() > match.length())) {
-                    match = phrase[0];
-                    replacement = phrase[1];
-                }
-            }
             for (String phrase : DE_PARTICLE_PHRASES) {
                 if (cursor + phrase.length() <= to && source.startsWith(phrase, cursor)
                         && (match == null || phrase.length() > match.length())) {
                     match = phrase;
                     replacement = phrase.substring(0, phrase.length() - 1) + "的";
+                }
+            }
+            for (String[] phrase : POLYPHONE_PHRASES) {
+                if (cursor + phrase[0].length() <= to && source.startsWith(phrase[0], cursor)
+                        && (match == null || phrase[0].length() > match.length())) {
+                    match = phrase[0];
+                    replacement = phrase[1];
                 }
             }
             if (match != null) {
