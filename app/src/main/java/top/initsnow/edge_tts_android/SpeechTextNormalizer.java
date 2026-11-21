@@ -17,7 +17,7 @@ final class SpeechTextNormalizer {
     private static final String[] DE_PARTICLE_PHRASES = {
             "慢慢地", "慢慢地", "认真地", "仔细地", "轻轻地", "渐渐地",
             "静静地", "悄悄地", "快速地", "缓缓地", "坚定地", "谨慎地",
-            "小心地", "清楚地", "明确地", "深刻地", "平静地", " calmly地"
+            "小心地", "清楚地", "明确地", "深刻地", "平静地"
     };
     private static final String[] DI_WORDS = {
             "新月沃地", "土地", "地方", "地区", "地域", "地理", "地名", "地面",
@@ -157,6 +157,7 @@ final class SpeechTextNormalizer {
         }
         String text = result.toString();
         if (text.startsWith("一十")) text = text.substring(1);
+        text = text.replace("二千", "两千").replace("二百", "两百").replace("二万", "两万");
         return text;
     }
 
