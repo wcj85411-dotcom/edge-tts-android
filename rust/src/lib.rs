@@ -1159,6 +1159,45 @@ mod tests {
     }
 
     #[test]
+    fn test_boundary_queue_preserves_order_and_drains_incrementally() {
+        let session = SynthesisSession::new();
+        session.push_boundary(BoundaryEvent {
+            kind: Boundary::Word,
+            offset_ticks: 100,
+            duration_ticks: 50,
+            text: "甲".to_string(),
+        });
+        session.push_boundary(BoundaryEvent {
+            kind: Boundary::Word,
+            offset_ticks: 200,
+            duration_ticks: 60,
+            text: "乙".to_string(),
+        });
+        let first = session.drain_boundaries(1);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].text, "甲");
+        let rest = session.drain_boundaries(8);
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].text, "乙");
+        assert!(session.drain_boundaries(8).is_empty());
+    }
+
+    #[test]
+    fn test_boundary_event_serializes_for_jni() {
+        let event = BoundaryEvent {
+            kind: Boundary::Word,
+            offset_ticks: 12_500_000,
+            duration_ticks: 3_000_000,
+            text: "土地".to_string(),
+        };
+        let json = serde_json::to_value(event).expect("serialize boundary event");
+        assert_eq!(json["kind"], "Word");
+        assert_eq!(json["offset_ticks"], 12_500_000u64);
+        assert_eq!(json["duration_ticks"], 3_000_000u64);
+        assert_eq!(json["text"], "土地");
+    }
+
+    #[test]
     fn test_synthesis_session_pcm() {
         let request_id = "test-req-1".to_string();
         let session = Arc::new(SynthesisSession::new());
