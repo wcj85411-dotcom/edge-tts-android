@@ -162,13 +162,14 @@ public final class EdgeTtsService extends TextToSpeechService {
                 return;
             }
 
+            SpeechTextNormalizer.Result speechText = SpeechTextNormalizer.normalize(text);
             String selectedVoice = resolveVoiceName(request, voices);
             String rate = mapPercentage(request.getSpeechRate(), settings().getDefaultRate());
             String pitch = mapPitch(request.getPitch(), settings().getDefaultPitch());
             String volume = settings().getDefaultVolume();
             PrefetchManager.updateLastConfig(selectedVoice, rate, volume, pitch);
             PrefetchManager.PrefetchStream prefetchedStream = PrefetchManager.take(
-                    text, selectedVoice, rate, volume, pitch
+                    speechText.getText(), selectedVoice, rate, volume, pitch
             );
             if (prefetchedStream != null) {
                 byte[] firstPrefetchedChunk = null;
@@ -194,7 +195,7 @@ public final class EdgeTtsService extends TextToSpeechService {
                     }
 
                     prefetchBoundarySearchFrom = dispatchPrefetchedBoundaries(
-                            prefetchedStream, text, callback, prefetchBoundarySearchFrom
+                            prefetchedStream, speechText, callback, prefetchBoundarySearchFrom
                     );
                     byte[] chunk = firstPrefetchedChunk;
                     int totalPrefetchedBytes = 0;
@@ -237,7 +238,7 @@ public final class EdgeTtsService extends TextToSpeechService {
             String error = beatriceConfigJson != null
                     ? EdgeTtsNative.beginSynthesisWithBeatrice(
                             requestId,
-                            text,
+                            speechText.getText(),
                             selectedVoice,
                             rate,
                             volume,
@@ -246,7 +247,7 @@ public final class EdgeTtsService extends TextToSpeechService {
                     )
                     : EdgeTtsNative.beginSynthesis(
                             requestId,
-                            text,
+                            speechText.getText(),
                             selectedVoice,
                             rate,
                             volume,
@@ -312,7 +313,7 @@ public final class EdgeTtsService extends TextToSpeechService {
             }
 
             boundarySearchFrom = dispatchWordBoundaries(
-                    requestId, text, callback, boundarySearchFrom
+                    requestId, speechText, callback, boundarySearchFrom
             );
 
             String streamError = EdgeTtsNative.getLastError(requestId);
@@ -345,7 +346,7 @@ public final class EdgeTtsService extends TextToSpeechService {
      */
     private int dispatchWordBoundaries(
             String requestId,
-            String sourceText,
+            SpeechTextNormalizer.Result sourceText,
             SynthesisCallback callback,
             int searchFrom
     ) {
@@ -356,7 +357,7 @@ public final class EdgeTtsService extends TextToSpeechService {
 
     private int dispatchPrefetchedBoundaries(
             PrefetchManager.PrefetchStream stream,
-            String sourceText,
+            SpeechTextNormalizer.Result sourceText,
             SynthesisCallback callback,
             int searchFrom
     ) {
@@ -369,7 +370,7 @@ public final class EdgeTtsService extends TextToSpeechService {
     }
 
     private int dispatchWordBoundaryJson(
-            String sourceText,
+            SpeechTextNormalizer.Result sourceText,
             SynthesisCallback callback,
             int searchFrom,
             String json
@@ -384,16 +385,17 @@ public final class EdgeTtsService extends TextToSpeechService {
                 if (event == null || !"Word".equals(event.optString("kind"))) continue;
                 String word = event.optString("text", "");
                 if (word.isEmpty()) continue;
-                int start = sourceText.indexOf(word, cursor);
+                int start = sourceText.getText().indexOf(word, cursor);
                 if (start < 0) {
                     Log.d(TAG, "Skip unmatched Edge word boundary: " + word);
                     continue;
                 }
-                int end = start + word.length();
+                int originalStart = sourceText.originalStart(start);
+                int originalEnd = sourceText.originalEnd(start + word.length());
                 long ticks = Math.max(0L, event.optLong("offset_ticks", 0L));
                 long frameLong = Math.round(ticks * (SAMPLE_RATE_HZ / 10_000_000.0));
                 int frame = (int) Math.min(Integer.MAX_VALUE, frameLong);
-                callback.rangeStart(start, end, frame);
+                callback.rangeStart(originalStart, originalEnd, frame);
                 cursor = end;
             }
             return cursor;
