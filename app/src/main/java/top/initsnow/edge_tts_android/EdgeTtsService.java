@@ -162,6 +162,34 @@ public final class EdgeTtsService extends TextToSpeechService {
             String rate = mapPercentage(request.getSpeechRate(), settings().getDefaultRate());
             String pitch = mapPitch(request.getPitch(), settings().getDefaultPitch());
             String volume = settings().getDefaultVolume();
+            PrefetchManager.updateLastConfig(selectedVoice, rate, volume, pitch);
+            byte[] prefetchedPcm = PrefetchManager.take(
+                    text, selectedVoice, rate, volume, pitch, 1500
+            );
+            if (prefetchedPcm != null) {
+                int cachedStartStatus = callback.start(SAMPLE_RATE_HZ, PCM_AUDIO_FORMAT, CHANNEL_COUNT);
+                if (cachedStartStatus != TextToSpeech.SUCCESS) {
+                    callback.error(TextToSpeech.ERROR_OUTPUT);
+                    return;
+                }
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    callback.rangeStart(0, text.length(), 0);
+                }
+                int offset = 0;
+                while (offset < prefetchedPcm.length) {
+                    int length = Math.min(Math.max(callback.getMaxBufferSize(), 8192),
+                            prefetchedPcm.length - offset);
+                    int audioStatus = callback.audioAvailable(prefetchedPcm, offset, length);
+                    if (audioStatus != TextToSpeech.SUCCESS) {
+                        callback.error(TextToSpeech.ERROR_OUTPUT);
+                        return;
+                    }
+                    offset += length;
+                }
+                logLatency("request=" + requestId + " served from prefetch cache bytes=" + prefetchedPcm.length);
+                callback.done();
+                return;
+            }
             String beatriceConfigJson = null; // Beatrice is disabled in this build.
             logLatency("request=" + requestId
                     + " onSynthesizeText textChars=" + text.length()
@@ -269,6 +297,7 @@ public final class EdgeTtsService extends TextToSpeechService {
 
     @Override
     protected void onStop() {
+        PrefetchManager.cancelAll();
         String requestId = currentRequestId.getAndSet(null);
         if (requestId != null) {
             EdgeTtsNative.stop(requestId);
