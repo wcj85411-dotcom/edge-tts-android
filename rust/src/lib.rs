@@ -751,7 +751,7 @@ fn spawn_synthesis_worker(
                         }
                         network_buffer.push(&chunk)
                     }
-                    SynthesisEvent::Boundary(event) => network_session.push_boundary(event)
+                    SynthesisEvent::Boundary(event) => network_session.push_boundary(event),
                 }
             }
 
