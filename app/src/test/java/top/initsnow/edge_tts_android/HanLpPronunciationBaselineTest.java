@@ -4,7 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 
-import com.hankcs.hanlp.dictionary.py.PinyinDictionary;
+import com.hankcs.hanlp.HanLP;
 import com.hankcs.hanlp.seg.common.Term;
 import com.hankcs.hanlp.tokenizer.StandardTokenizer;
 
@@ -36,7 +36,7 @@ public class HanLpPronunciationBaselineTest {
             assertNotNull("HanLP segmentation result", terms);
             assertFalse("Expected non-empty segmentation for: " + sample, terms.isEmpty());
 
-            List<?> pinyin = PinyinDictionary.convertToPinyinList(sample);
+            List<?> pinyin = HanLP.convertToPinyinList(sample);
             assertNotNull("HanLP pinyin result", pinyin);
             assertEquals("Pinyin output must align with source characters: " + sample,
                     sample.length(), pinyin.size());
