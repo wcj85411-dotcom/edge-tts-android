@@ -138,27 +138,32 @@ final class SpeechTextNormalizer {
         String[] small = {"零", "一", "二", "三", "四", "五", "六", "七", "八", "九"};
         String[] units = {"", "十", "百", "千"};
         String[] big = {"", "万", "亿"};
-        StringBuilder result = new StringBuilder();
-        int groupIndex = 0;
-        boolean pendingZero = false;
-        while (value > 0 && groupIndex < big.length) {
-            int group = (int) (value % 10000);
-            if (group != 0) {
-                String section = sectionToChinese(group, small, units);
-                if (pendingZero && result.length() > 0 && result.charAt(0) != '零') {
-                    result.insert(0, "零");
-                }
-                result.insert(0, section + big[groupIndex]);
-            } else if (result.length() > 0) {
-                pendingZero = true;
-            }
+        int[] groups = new int[3];
+        int count = 0;
+        while (value > 0 && count < groups.length) {
+            groups[count++] = (int) (value % 10000);
             value /= 10000;
-            groupIndex++;
+        }
+        StringBuilder result = new StringBuilder();
+        boolean emitted = false;
+        boolean skippedGroup = false;
+        for (int i = count - 1; i >= 0; i--) {
+            int group = groups[i];
+            if (group == 0) {
+                if (emitted) skippedGroup = true;
+                continue;
+            }
+            if (emitted && (skippedGroup || group < 1000)) result.append("零");
+            result.append(sectionToChinese(group, small, units)).append(big[i]);
+            emitted = true;
+            skippedGroup = false;
         }
         String text = result.toString();
         if (text.startsWith("一十")) text = text.substring(1);
-        text = text.replace("二千", "两千").replace("二百", "两百").replace("二万", "两万");
-        return text;
+        return text.replace("二千", "两千")
+                .replace("二百", "两百")
+                .replace("二万", "两万")
+                .replace("二亿", "两亿");
     }
 
     private static String sectionToChinese(int value, String[] digits, String[] units) {
