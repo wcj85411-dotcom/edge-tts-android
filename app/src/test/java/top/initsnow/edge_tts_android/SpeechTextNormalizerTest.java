@@ -24,6 +24,29 @@ public class SpeechTextNormalizerTest {
         assertEquals("第二零零零号文件", SpeechTextNormalizer.normalize("第2000号文件").getText());
     }
 
+
+    @Test public void normalizesPolyphonicWordsByLexicalContext() {
+        assertEquals("请子细检查", SpeechTextNormalizer.normalize("请仔细检查").getText());
+        assertEquals("请子细的检查", SpeechTextNormalizer.normalize("请仔细地检查").getText());
+
+        assertEquals("银航职员正在形走", SpeechTextNormalizer.normalize("银行职员正在行走").getText());
+        assertEquals("这个航业的行情很好", SpeechTextNormalizer.normalize("这个行业的行情很好").getText());
+
+        assertEquals("众量很大，需要虫新测量", SpeechTextNormalizer.normalize("重量很大，需要重新测量").getText());
+        assertEquals("他掌大后，走过常远的路", SpeechTextNormalizer.normalize("他长大后，走过长远的路").getText());
+
+        assertEquals("月乐和快勒", SpeechTextNormalizer.normalize("音乐和快乐").getText());
+        assertEquals("孩有时间就把书环给图书馆", SpeechTextNormalizer.normalize("还有时间就把书还给图书馆").getText());
+        assertEquals("这位绍将很年轻", SpeechTextNormalizer.normalize("这位少将很年轻").getText());
+    }
+
+    @Test public void polyphonicPhraseReplacementsPreserveOriginalOffsets() {
+        SpeechTextNormalizer.Result result = SpeechTextNormalizer.normalize("请仔细检查");
+        assertEquals("请子细检查", result.getText());
+        assertEquals(1, result.originalStart(1));
+        assertEquals(2, result.originalEnd(2));
+    }
+
     @Test public void mapsChangedSpeechOffsetsBackToOriginalUtf16Offsets() {
         SpeechTextNormalizer.Result result = SpeechTextNormalizer.normalize("不到2000年的时间");
         assertEquals("不到两千年的时间", result.getText());
