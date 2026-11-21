@@ -10,7 +10,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Instant;
 
-use edge_tts_rust::{EdgeTtsClient, SpeakOptions, SynthesisEvent};
+use edge_tts_rust::{Boundary, EdgeTtsClient, SpeakOptions, SynthesisEvent};
 use futures_util::StreamExt;
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JString};
@@ -715,6 +715,7 @@ fn spawn_synthesis_worker(
                         rate,
                         volume,
                         pitch,
+                        boundary: Boundary::Both,
                         ..SpeakOptions::default()
                     },
                 )
