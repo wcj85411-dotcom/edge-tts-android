@@ -134,6 +134,13 @@ mod tests {
     }
 
     #[test]
+    fn requests_word_and_sentence_boundaries_together() {
+        let msg = speech_config_message(Boundary::Both, DEFAULT_OUTPUT_FORMAT);
+        assert!(msg.contains("\\\"wordBoundaryEnabled\\\":true"));
+        assert!(msg.contains("\\\"sentenceBoundaryEnabled\\\":true"));
+    }
+
+    #[test]
     fn parses_cbr_bitrates_correctly() {
         assert_eq!(cbr_bitrate_bps("audio-24khz-48kbitrate-mono-mp3"), Some(48_000));
         assert_eq!(cbr_bitrate_bps("audio-24khz-96kbitrate-mono-mp3"), Some(96_000));
