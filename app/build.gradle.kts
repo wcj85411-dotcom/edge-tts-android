@@ -361,6 +361,14 @@ dependencies {
     testImplementation(libs.junit)
     // Experimental only: used by local JVM tests; never packaged into the APK.
     testImplementation("com.hankcs:hanlp:portable-1.8.6")
+
+    // Experimental pronunciation research: expose captured sample output in CI logs.
+    tasks.withType<Test>().configureEach {
+        testLogging {
+            showStandardStreams = true
+            events("passed", "failed", "skipped")
+        }
+    }
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
 }
