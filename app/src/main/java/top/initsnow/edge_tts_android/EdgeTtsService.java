@@ -199,10 +199,7 @@ public final class EdgeTtsService extends TextToSpeechService {
                     byte[] chunk = firstPrefetchedChunk;
                     int totalPrefetchedBytes = 0;
                     while (chunk != null) {
-                        boundarySearchFrom = dispatchWordBoundaries(
-                        requestId, text, callback, boundarySearchFrom
-                );
-                int audioStatus = callback.audioAvailable(chunk, 0, chunk.length);
+                        int audioStatus = callback.audioAvailable(chunk, 0, chunk.length);
                         if (audioStatus != TextToSpeech.SUCCESS) {
                             prefetchedStream.cancel();
                             callback.error(TextToSpeech.ERROR_OUTPUT);
