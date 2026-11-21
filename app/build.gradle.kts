@@ -147,14 +147,14 @@ val rustBuildJniLibs by tasks.registering {
             if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
                 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "")
             endif()
-            if(EXISTS "${ndkToolchainFile.absolutePath.replace('\\\\', '/')}")
-                include("${ndkToolchainFile.absolutePath.replace('\\\\', '/')}")
+            if(EXISTS "${ndkToolchainFile.absolutePath.replace('\\', '/')}")
+                include("${ndkToolchainFile.absolutePath.replace('\\', '/')}")
             elseif(DEFINED ENV{ANDROID_NDK_HOME})
                 include("${'$'}ENV{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake")
             endif()
             """.trimIndent()
         )
-        val cmakeToolchainPath = toolchainWrapperFile.absolutePath.replace('\\\\', '/')
+        val cmakeToolchainPath = toolchainWrapperFile.absolutePath.replace('\\', '/')
 
         // Resolve CMake and Ninja executables for audiopus_sys native build
         val candidateCmakeFiles = mutableListOf<File>()
@@ -271,7 +271,7 @@ val rustBuildJniLibs by tasks.registering {
                     }
                     commandLine(cmdList)
                 } else {
-                    val sanitizedOutputDir = outputDirFile.absolutePath.replace('\\\\', '/')
+                    val sanitizedOutputDir = outputDirFile.absolutePath.replace('\\', '/')
                     val cargoExe = findExecutableOnPath("cargo")
                     if (cargoExe != null) {
                         val cmdList = mutableListOf(
