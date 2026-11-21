@@ -221,7 +221,7 @@ public final class EdgeTtsService extends TextToSpeechService {
                     }
 
                     prefetchBoundarySearchFrom = dispatchPrefetchedBoundaries(
-                            prefetchedStream, text, callback, prefetchBoundarySearchFrom
+                            prefetchedStream, speechText, callback, prefetchBoundarySearchFrom
                     );
                     logLatency("request=" + requestId
                             + " streamed from prefetch bytes=" + totalPrefetchedBytes);
