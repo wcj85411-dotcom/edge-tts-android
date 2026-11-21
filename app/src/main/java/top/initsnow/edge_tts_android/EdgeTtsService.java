@@ -163,32 +163,56 @@ public final class EdgeTtsService extends TextToSpeechService {
             String pitch = mapPitch(request.getPitch(), settings().getDefaultPitch());
             String volume = settings().getDefaultVolume();
             PrefetchManager.updateLastConfig(selectedVoice, rate, volume, pitch);
-            byte[] prefetchedPcm = PrefetchManager.take(
-                    text, selectedVoice, rate, volume, pitch, 1500
+            PrefetchManager.PrefetchStream prefetchedStream = PrefetchManager.take(
+                    text, selectedVoice, rate, volume, pitch
             );
-            if (prefetchedPcm != null) {
-                int cachedStartStatus = callback.start(SAMPLE_RATE_HZ, PCM_AUDIO_FORMAT, CHANNEL_COUNT);
-                if (cachedStartStatus != TextToSpeech.SUCCESS) {
-                    callback.error(TextToSpeech.ERROR_OUTPUT);
-                    return;
+            if (prefetchedStream != null) {
+                byte[] firstPrefetchedChunk = null;
+                try {
+                    // Wait only for the first available audio chunk, not for the
+                    // entire paragraph to finish synthesizing.
+                    firstPrefetchedChunk = prefetchedStream.readNext();
+                } catch (IOException prefetchError) {
+                    Log.w(TAG, "Prefetch failed before first audio chunk; falling back to normal synthesis",
+                            prefetchError);
                 }
-                if (android.os.Build.VERSION.SDK_INT >= 26) {
-                    callback.rangeStart(0, text.length(), 0);
-                }
-                int offset = 0;
-                while (offset < prefetchedPcm.length) {
-                    int length = Math.min(Math.max(callback.getMaxBufferSize(), 8192),
-                            prefetchedPcm.length - offset);
-                    int audioStatus = callback.audioAvailable(prefetchedPcm, offset, length);
-                    if (audioStatus != TextToSpeech.SUCCESS) {
+
+                if (firstPrefetchedChunk != null) {
+                    int cachedStartStatus = callback.start(SAMPLE_RATE_HZ, PCM_AUDIO_FORMAT, CHANNEL_COUNT);
+                    if (cachedStartStatus != TextToSpeech.SUCCESS) {
+                        prefetchedStream.cancel();
                         callback.error(TextToSpeech.ERROR_OUTPUT);
                         return;
                     }
-                    offset += length;
+                    if (android.os.Build.VERSION.SDK_INT >= 26) {
+                        callback.rangeStart(0, text.length(), 0);
+                    }
+
+                    byte[] chunk = firstPrefetchedChunk;
+                    int totalPrefetchedBytes = 0;
+                    while (chunk != null) {
+                        int audioStatus = callback.audioAvailable(chunk, 0, chunk.length);
+                        if (audioStatus != TextToSpeech.SUCCESS) {
+                            prefetchedStream.cancel();
+                            callback.error(TextToSpeech.ERROR_OUTPUT);
+                            return;
+                        }
+                        totalPrefetchedBytes += chunk.length;
+                        try {
+                            chunk = prefetchedStream.readNext();
+                        } catch (IOException streamError) {
+                            Log.e(TAG, "Prefetched audio stream failed after playback began", streamError);
+                            sLastSynthesisError = streamError.getMessage();
+                            callback.error(TextToSpeech.ERROR_NETWORK);
+                            return;
+                        }
+                    }
+
+                    logLatency("request=" + requestId
+                            + " streamed from prefetch bytes=" + totalPrefetchedBytes);
+                    callback.done();
+                    return;
                 }
-                logLatency("request=" + requestId + " served from prefetch cache bytes=" + prefetchedPcm.length);
-                callback.done();
-                return;
             }
             String beatriceConfigJson = null; // Beatrice is disabled in this build.
             logLatency("request=" + requestId
