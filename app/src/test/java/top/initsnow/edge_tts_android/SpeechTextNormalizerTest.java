@@ -11,6 +11,7 @@ public class SpeechTextNormalizerTest {
         assertEquals("他慢慢的走过土帝", SpeechTextNormalizer.normalize("他慢慢地走过土地").getText());
         assertEquals("沿海帝区的居民认真仔细的核对资料",
                 SpeechTextNormalizer.normalize("沿海地区的居民认真仔细地核对资料").getText());
+        assertEquals("脚印留在帝上", SpeechTextNormalizer.normalize("脚印留在地上").getText());
     }
 
     @Test public void distinguishesCalendarYearsFromDurations() {
