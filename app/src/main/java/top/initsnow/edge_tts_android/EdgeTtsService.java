@@ -208,7 +208,7 @@ public final class EdgeTtsService extends TextToSpeechService {
                         }
                         totalPrefetchedBytes += chunk.length;
                         prefetchBoundarySearchFrom = dispatchPrefetchedBoundaries(
-                                prefetchedStream, text, callback, prefetchBoundarySearchFrom
+                                prefetchedStream, speechText, callback, prefetchBoundarySearchFrom
                         );
                         try {
                             chunk = prefetchedStream.readNext();
@@ -396,7 +396,7 @@ public final class EdgeTtsService extends TextToSpeechService {
                 long frameLong = Math.round(ticks * (SAMPLE_RATE_HZ / 10_000_000.0));
                 int frame = (int) Math.min(Integer.MAX_VALUE, frameLong);
                 callback.rangeStart(originalStart, originalEnd, frame);
-                cursor = end;
+                cursor = start + word.length();
             }
             return cursor;
         } catch (JSONException exception) {
