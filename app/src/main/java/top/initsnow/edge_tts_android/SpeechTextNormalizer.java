@@ -15,7 +15,7 @@ import java.util.regex.Pattern;
 final class SpeechTextNormalizer {
     private static final Pattern NUMBER = Pattern.compile("(?<![0-9])([0-9]{1,12})(?![0-9])");
     private static final String[] DE_PARTICLE_PHRASES = {
-            "慢慢地", "慢慢地", "认真地", "仔细地", "轻轻地", "渐渐地",
+            "慢慢地", "认真地", "仔细地", "轻轻地", "渐渐地",
             "静静地", "悄悄地", "快速地", "缓缓地", "坚定地", "谨慎地",
             "小心地", "清楚地", "明确地", "深刻地", "平静地"
     };
