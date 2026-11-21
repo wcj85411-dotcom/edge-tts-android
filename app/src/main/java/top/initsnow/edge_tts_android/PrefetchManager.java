@@ -216,6 +216,8 @@ final class PrefetchManager {
         stream.requestId = requestId;
         long startedAt = android.os.SystemClock.elapsedRealtime();
         int totalBytes = 0;
+        boolean firstChunkLogged = false;
+        Log.i(TAG, "Prefetch worker started chars=" + text.length());
         try {
             if (stream.cancelled.get() || Thread.currentThread().isInterrupted()) return;
             String beginError = EdgeTtsNative.beginSynthesis(
@@ -230,6 +232,12 @@ final class PrefetchManager {
                 byte[] chunk = EdgeTtsNative.readPcmChunk(requestId, READ_CHUNK_BYTES);
                 if (chunk == null || chunk.length == 0) break;
                 if (!stream.offer(chunk)) return;
+                if (!firstChunkLogged) {
+                    firstChunkLogged = true;
+                    Log.i(TAG, "Prefetch first chunk ready elapsedMs="
+                            + (android.os.SystemClock.elapsedRealtime() - startedAt)
+                            + " bytes=" + chunk.length);
+                }
                 stream.offerBoundaryEvents(EdgeTtsNative.readBoundaryEvents(requestId, 256));
                 totalBytes += chunk.length;
             }
