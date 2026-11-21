@@ -34,11 +34,14 @@ static TOKIO_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
 });
 static EDGE_TTS_CLIENT: Lazy<Result<EdgeTtsClient, String>> = Lazy::new(|| {
     EdgeTtsClient::builder()
-        // Avoid keeping an idle Microsoft WebSocket open across requests.
-        .ws_pool_size(0)
+        // Keep one recently used WebSocket available for the next Android TTS utterance.
+        // Warmup stays disabled: the first synthesis connects on demand, avoiding a
+        // background connection race on VPN/mobile networks.
+        .ws_pool_size(1)
         .ws_warmup(false)
-        // Use a fresh connection for each text chunk.
-        .request_chunk_reuse(false)
+        // Reuse the connection across Edge text chunks and subsequent utterances.
+        // The client falls back to a fresh socket when a reusable connection is rejected.
+        .request_chunk_reuse(true)
         .connect_timeout(std::time::Duration::from_secs(15))
         .receive_timeout(std::time::Duration::from_secs(90))
         .build()
