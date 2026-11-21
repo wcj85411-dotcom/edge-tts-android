@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Streams one upcoming utterance ahead of playback.
@@ -76,6 +77,7 @@ final class PrefetchManager {
                 new ArrayBlockingQueue<>(MAX_QUEUED_CHUNKS);
         private final AtomicBoolean cancelled = new AtomicBoolean(false);
         private final AtomicBoolean terminalQueued = new AtomicBoolean(false);
+        private final ConcurrentLinkedQueue<String> boundaryEvents = new ConcurrentLinkedQueue<>();
         private volatile Future<?> future;
         private volatile String requestId;
 
@@ -105,6 +107,14 @@ final class PrefetchManager {
                 queue.clear();
                 queue.offer(AudioChunk.END);
             }
+        }
+
+        private void offerBoundaryEvents(String json) {
+            if (json != null && !json.isEmpty() && !"[]".equals(json)) boundaryEvents.offer(json);
+        }
+
+        String pollBoundaryEvents() {
+            return boundaryEvents.poll();
         }
 
         byte[] readNext() throws IOException {
@@ -217,10 +227,12 @@ final class PrefetchManager {
                 byte[] chunk = EdgeTtsNative.readPcmChunk(requestId, READ_CHUNK_BYTES);
                 if (chunk == null || chunk.length == 0) break;
                 if (!stream.offer(chunk)) return;
+                stream.offerBoundaryEvents(EdgeTtsNative.readBoundaryEvents(requestId, 256));
                 totalBytes += chunk.length;
             }
 
             if (stream.cancelled.get() || Thread.currentThread().isInterrupted()) return;
+            stream.offerBoundaryEvents(EdgeTtsNative.readBoundaryEvents(requestId, 4096));
             String streamError = EdgeTtsNative.getLastError(requestId);
             stream.finish(streamError);
             Log.i(TAG, "Prefetch stream finished bytes=" + totalBytes
