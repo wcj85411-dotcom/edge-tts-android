@@ -1,0 +1,104 @@
+name: Build Personal Reader with the fixed Edge TTS signing key
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - polyphone-emotion-lab
+    paths:
+      - '.github/workflows/personal-reader-signed-build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: personal-reader-fixed-signing-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Personal Reader source
+        uses: actions/checkout@v4
+        with:
+          repository: wcj85411-dotcom/legado
+          ref: personal-reader-development
+          path: reader
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Restore the existing Edge TTS release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.EDGE_TTS_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.EDGE_TTS_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.EDGE_TTS_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.EDGE_TTS_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64" || { echo "Missing existing Edge TTS keystore secret"; exit 1; }
+          test -n "$STORE_PASSWORD" || { echo "Missing existing Edge TTS store password secret"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "Missing existing Edge TTS key alias secret"; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "Missing existing Edge TTS key password secret"; exit 1; }
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/edge-tts-release.jks"
+          test -s "$RUNNER_TEMP/edge-tts-release.jks"
+          {
+            printf 'RELEASE_STORE_FILE=%s\\n' "$RUNNER_TEMP/edge-tts-release.jks"
+            printf 'RELEASE_STORE_PASSWORD=%s\\n' "$STORE_PASSWORD"
+            printf 'RELEASE_KEY_ALIAS=%s\\n' "$KEY_ALIAS"
+            printf 'RELEASE_KEY_PASSWORD=%s\\n' "$KEY_PASSWORD"
+          } >> "$GITHUB_WORKSPACE/reader/gradle.properties"
+
+      - name: Build signed ARM release APK
+        working-directory: reader
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew :app:assembleAppRelease -ParmOnly=true --no-daemon --stacktrace
+
+      - name: Verify package identity and fixed signing certificate
+        working-directory: reader
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          EXPECTED_CERT_SHA256: 1CB922D40016E2EF44F1A023F2748EE592CF277A63C99CBC8D01FF470478E2AD
+          EXPECTED_PACKAGE: com.legado.app.release
+        run: |
+          set -euo pipefail
+          export PATH="$ANDROID_HOME/build-tools/36.0.0:$PATH"
+          APK="$(find app/build/outputs/apk -type f -name '*.apk' -print -quit)"
+          test -n "$APK"
+          apksigner verify --verbose --print-certs "$APK"
+          ACTUAL_CERT="$(apksigner verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print toupper($2); exit}' | tr -d ':')"
+          test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256" || {
+            echo "Signing certificate mismatch; refusing to publish an update APK."
+            exit 1
+          }
+          ACTUAL_PACKAGE="$(aapt dump badging "$APK" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n 1)"
+          test "$ACTUAL_PACKAGE" = "$EXPECTED_PACKAGE" || {
+            echo "Package identity mismatch: expected $EXPECTED_PACKAGE, got $ACTUAL_PACKAGE"
+            exit 1
+          }
+          mkdir -p signed-release
+          cp "$APK" signed-release/personal-reader-release.apk
+          echo "Verified package: $ACTUAL_PACKAGE"
+          aapt dump badging "$APK" | head -n 1
+
+      - name: Upload signed Personal Reader release
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-reader-signed-release
+          path: reader/signed-release/personal-reader-release.apk
+          if-no-files-found: error
+          retention-days: 14
