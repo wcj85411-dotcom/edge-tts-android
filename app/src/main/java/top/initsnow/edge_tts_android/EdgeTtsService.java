@@ -172,6 +172,7 @@ public final class EdgeTtsService extends TextToSpeechService {
             );
             if (prefetchedStream != null) {
                 byte[] firstPrefetchedChunk = null;
+                int prefetchBoundarySearchFrom = 0;
                 try {
                     // Wait only for the first available audio chunk, not for the
                     // entire paragraph to finish synthesizing.
@@ -192,6 +193,9 @@ public final class EdgeTtsService extends TextToSpeechService {
                         callback.rangeStart(0, text.length(), 0);
                     }
 
+                    prefetchBoundarySearchFrom = dispatchPrefetchedBoundaries(
+                            prefetchedStream, text, callback, prefetchBoundarySearchFrom
+                    );
                     byte[] chunk = firstPrefetchedChunk;
                     int totalPrefetchedBytes = 0;
                     while (chunk != null) {
@@ -205,6 +209,9 @@ public final class EdgeTtsService extends TextToSpeechService {
                             return;
                         }
                         totalPrefetchedBytes += chunk.length;
+                        prefetchBoundarySearchFrom = dispatchPrefetchedBoundaries(
+                                prefetchedStream, text, callback, prefetchBoundarySearchFrom
+                        );
                         try {
                             chunk = prefetchedStream.readNext();
                         } catch (IOException streamError) {
@@ -215,6 +222,9 @@ public final class EdgeTtsService extends TextToSpeechService {
                         }
                     }
 
+                    prefetchBoundarySearchFrom = dispatchPrefetchedBoundaries(
+                            prefetchedStream, text, callback, prefetchBoundarySearchFrom
+                    );
                     logLatency("request=" + requestId
                             + " streamed from prefetch bytes=" + totalPrefetchedBytes);
                     callback.done();
@@ -344,7 +354,31 @@ public final class EdgeTtsService extends TextToSpeechService {
     ) {
         if (android.os.Build.VERSION.SDK_INT < 26) return searchFrom;
         String json = EdgeTtsNative.readBoundaryEvents(requestId, 256);
-        if (json == null || json.isEmpty() || json.charAt(0) == 'E') return searchFrom;
+        return dispatchWordBoundaryJson(sourceText, callback, searchFrom, json);
+    }
+
+    private int dispatchPrefetchedBoundaries(
+            PrefetchManager.PrefetchStream stream,
+            String sourceText,
+            SynthesisCallback callback,
+            int searchFrom
+    ) {
+        int cursor = searchFrom;
+        String json;
+        while ((json = stream.pollBoundaryEvents()) != null) {
+            cursor = dispatchWordBoundaryJson(sourceText, callback, cursor, json);
+        }
+        return cursor;
+    }
+
+    private int dispatchWordBoundaryJson(
+            String sourceText,
+            SynthesisCallback callback,
+            int searchFrom,
+            String json
+    ) {
+        if (android.os.Build.VERSION.SDK_INT < 26
+                || json == null || json.isEmpty() || json.charAt(0) == 'E') return searchFrom;
         try {
             JSONArray events = new JSONArray(json);
             int cursor = searchFrom;
