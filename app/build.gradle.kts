@@ -69,8 +69,8 @@ android {
         applicationId = "top.initsnow.edge_tts_android.prefetchtest"
         minSdk = 24
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.1.8-prefetch"
+        versionCode = 10
+        versionName = "0.1.9-prefetch-stream"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
