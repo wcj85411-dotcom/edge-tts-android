@@ -177,7 +177,11 @@ public final class EdgeTtsService extends TextToSpeechService {
                 try {
                     // Wait only for the first available audio chunk, not for the
                     // entire paragraph to finish synthesizing.
+                    long prefetchWaitStarted = SystemClock.elapsedRealtime();
                     firstPrefetchedChunk = prefetchedStream.readNext();
+                    logLatency("request=" + requestId + " first prefetched chunk waitMs="
+                            + (SystemClock.elapsedRealtime() - prefetchWaitStarted)
+                            + " available=" + (firstPrefetchedChunk != null));
                 } catch (IOException prefetchError) {
                     Log.w(TAG, "Prefetch failed before first audio chunk; falling back to normal synthesis",
                             prefetchError);
