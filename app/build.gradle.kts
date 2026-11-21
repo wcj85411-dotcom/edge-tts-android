@@ -66,11 +66,12 @@ android {
     compileSdk = 36 // 保持你要求的 36
 
     defaultConfig {
-        applicationId = "top.initsnow.edge_tts_android.prefetchtest"
+        // Separate lab package: install alongside the existing signed prefetch test app.
+        applicationId = "top.initsnow.edge_tts_android.prefetchtest.lab"
         minSdk = 24
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.1.9-prefetch-stream"
+        versionCode = 11
+        versionName = "0.1.9-prefetch-stream-lab"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -146,14 +147,14 @@ val rustBuildJniLibs by tasks.registering {
             if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
                 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "")
             endif()
-            if(EXISTS "${ndkToolchainFile.absolutePath.replace('\\', '/')}")
-                include("${ndkToolchainFile.absolutePath.replace('\\', '/')}")
+            if(EXISTS "${ndkToolchainFile.absolutePath.replace('\\\\', '/')}")
+                include("${ndkToolchainFile.absolutePath.replace('\\\\', '/')}")
             elseif(DEFINED ENV{ANDROID_NDK_HOME})
                 include("${'$'}ENV{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake")
             endif()
             """.trimIndent()
         )
-        val cmakeToolchainPath = toolchainWrapperFile.absolutePath.replace('\\', '/')
+        val cmakeToolchainPath = toolchainWrapperFile.absolutePath.replace('\\\\', '/')
 
         // Resolve CMake and Ninja executables for audiopus_sys native build
         val candidateCmakeFiles = mutableListOf<File>()
@@ -270,7 +271,7 @@ val rustBuildJniLibs by tasks.registering {
                     }
                     commandLine(cmdList)
                 } else {
-                    val sanitizedOutputDir = outputDirFile.absolutePath.replace('\\', '/')
+                    val sanitizedOutputDir = outputDirFile.absolutePath.replace('\\\\', '/')
                     val cargoExe = findExecutableOnPath("cargo")
                     if (cargoExe != null) {
                         val cmdList = mutableListOf(
