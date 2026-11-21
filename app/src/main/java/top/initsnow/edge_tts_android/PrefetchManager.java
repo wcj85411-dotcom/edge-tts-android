@@ -204,6 +204,7 @@ final class PrefetchManager {
         long startedAt = android.os.SystemClock.elapsedRealtime();
         int totalBytes = 0;
         try {
+            if (stream.cancelled.get() || Thread.currentThread().isInterrupted()) return;
             String beginError = EdgeTtsNative.beginSynthesis(
                     requestId, text, config.voice, config.rate, config.volume, config.pitch
             );
