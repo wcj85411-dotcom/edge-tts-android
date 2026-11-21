@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - voice-gap-pool-experiment
 
 permissions:
   contents: read
