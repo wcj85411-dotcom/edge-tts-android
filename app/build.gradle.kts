@@ -66,11 +66,11 @@ android {
     compileSdk = 36 // 保持你要求的 36
 
     defaultConfig {
-        applicationId = "top.initsnow.edge_tts_android"
+        applicationId = "top.initsnow.edge_tts_android.pooltest"
         minSdk = 24
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.1.7"
+        versionCode = 8
+        versionName = "0.1.7-pooltest"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
