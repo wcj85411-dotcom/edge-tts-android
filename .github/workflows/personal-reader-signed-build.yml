@@ -1,5 +1,6 @@
 name: Build Personal Reader with the fixed Edge TTS signing key
 # Always checks out the latest personal-reader-development source before building.
+# Rebuild after the manual-page restart and speech-highlight synchronization fixes.
 
 on:
   workflow_dispatch:
