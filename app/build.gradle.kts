@@ -67,11 +67,11 @@ android {
 
     defaultConfig {
         // Separate lab package: install alongside the existing signed prefetch test app.
-        applicationId = "top.initsnow.edge_tts_android.prefetchtest.lab"
+        applicationId = "top.initsnow.edge_tts_android.prefetchtest"
         minSdk = 24
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.2.2"
+        versionCode = 12
+        versionName = "0.1.11"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
