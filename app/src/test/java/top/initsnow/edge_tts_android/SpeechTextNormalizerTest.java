@@ -30,7 +30,7 @@ public class SpeechTextNormalizerTest {
         assertEquals("请子细的检查", SpeechTextNormalizer.normalize("请仔细地检查").getText());
 
         assertEquals("银航职员正在形走", SpeechTextNormalizer.normalize("银行职员正在行走").getText());
-        assertEquals("这个航业的行情很好", SpeechTextNormalizer.normalize("这个行业的行情很好").getText());
+        assertEquals("这个航业的航情很好", SpeechTextNormalizer.normalize("这个行业的行情很好").getText());
 
         assertEquals("众量很大，需要虫新测量", SpeechTextNormalizer.normalize("重量很大，需要重新测量").getText());
         assertEquals("他掌大后，走过常远的路", SpeechTextNormalizer.normalize("他长大后，走过长远的路").getText());
