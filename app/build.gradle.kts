@@ -66,11 +66,11 @@ android {
     compileSdk = 36 // 保持你要求的 36
 
     defaultConfig {
-        // Separate lab package: install alongside the existing signed prefetch test app.
+        // Preserve the established release package identity for in-place upgrades.
         applicationId = "top.initsnow.edge_tts_android.prefetchtest"
         minSdk = 24
         targetSdk = 36
-        versionCode = 12
+        versionCode = 15
         versionName = "0.1.11"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
