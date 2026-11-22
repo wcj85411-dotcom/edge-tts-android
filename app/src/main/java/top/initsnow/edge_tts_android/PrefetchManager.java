@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Streams one upcoming utterance ahead of playback.
@@ -24,8 +25,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class PrefetchManager {
     private static final String TAG = "EdgeTtsPrefetch";
-    private static final int READ_CHUNK_BYTES = 32 * 1024;
-    private static final int MAX_QUEUED_CHUNKS = 96;
+    private static final int READ_CHUNK_BYTES = 8 * 1024;
+    private static final int MAX_QUEUED_CHUNKS = 384;
     private static final int MAX_PENDING_REQUESTS = 2;
     private static final Object LOCK = new Object();
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(r -> {
@@ -76,6 +77,7 @@ final class PrefetchManager {
                 new ArrayBlockingQueue<>(MAX_QUEUED_CHUNKS);
         private final AtomicBoolean cancelled = new AtomicBoolean(false);
         private final AtomicBoolean terminalQueued = new AtomicBoolean(false);
+        private final ConcurrentLinkedQueue<String> boundaryEvents = new ConcurrentLinkedQueue<>();
         private volatile Future<?> future;
         private volatile String requestId;
 
@@ -105,6 +107,14 @@ final class PrefetchManager {
                 queue.clear();
                 queue.offer(AudioChunk.END);
             }
+        }
+
+        private void offerBoundaryEvents(String json) {
+            if (json != null && !json.isEmpty() && !"[]".equals(json)) boundaryEvents.offer(json);
+        }
+
+        String pollBoundaryEvents() {
+            return boundaryEvents.poll();
         }
 
         byte[] readNext() throws IOException {
@@ -148,15 +158,18 @@ final class PrefetchManager {
 
     static boolean prefetch(String text, SynthesisConfig config) {
         if (text == null || text.trim().isEmpty() || config == null) return false;
-        String key = config.key(text);
+        // Normalize exactly once with the same deterministic rules used by the
+        // foreground synthesis request, so prefetch keys and spoken payloads match.
+        String speechText = SpeechTextNormalizer.normalize(text).getText();
+        String key = config.key(speechText);
         synchronized (LOCK) {
             if (PENDING.containsKey(key)) return true;
             if (PENDING.size() >= MAX_PENDING_REQUESTS) return false;
             PrefetchStream stream = new PrefetchStream(key);
             PENDING.put(key, stream);
             ALL_STREAMS.add(stream);
-            stream.future = EXECUTOR.submit(() -> synthesizeAhead(stream, text, config));
-            Log.i(TAG, "Queued streaming prefetch chars=" + text.length()
+            stream.future = EXECUTOR.submit(() -> synthesizeAhead(stream, speechText, config));
+            Log.i(TAG, "Queued streaming prefetch chars=" + speechText.length()
                     + " pending=" + PENDING.size());
             return true;
         }
@@ -203,6 +216,8 @@ final class PrefetchManager {
         stream.requestId = requestId;
         long startedAt = android.os.SystemClock.elapsedRealtime();
         int totalBytes = 0;
+        boolean firstChunkLogged = false;
+        Log.i(TAG, "Prefetch worker started chars=" + text.length());
         try {
             if (stream.cancelled.get() || Thread.currentThread().isInterrupted()) return;
             String beginError = EdgeTtsNative.beginSynthesis(
@@ -216,11 +231,22 @@ final class PrefetchManager {
             while (!Thread.currentThread().isInterrupted() && !stream.cancelled.get()) {
                 byte[] chunk = EdgeTtsNative.readPcmChunk(requestId, READ_CHUNK_BYTES);
                 if (chunk == null || chunk.length == 0) break;
+                // Queue metadata before PCM so Android can register range markers
+                // before submitting the corresponding audio chunk.
+                stream.offerBoundaryEvents(EdgeTtsNative.readBoundaryEvents(requestId, 256));
                 if (!stream.offer(chunk)) return;
+                if (!firstChunkLogged) {
+                    firstChunkLogged = true;
+                    Log.i(TAG, "Prefetch first chunk ready elapsedMs="
+                            + (android.os.SystemClock.elapsedRealtime() - startedAt)
+                            + " bytes=" + chunk.length);
+                }
+                stream.offerBoundaryEvents(EdgeTtsNative.readBoundaryEvents(requestId, 256));
                 totalBytes += chunk.length;
             }
 
             if (stream.cancelled.get() || Thread.currentThread().isInterrupted()) return;
+            stream.offerBoundaryEvents(EdgeTtsNative.readBoundaryEvents(requestId, 4096));
             String streamError = EdgeTtsNative.getLastError(requestId);
             stream.finish(streamError);
             Log.i(TAG, "Prefetch stream finished bytes=" + totalBytes

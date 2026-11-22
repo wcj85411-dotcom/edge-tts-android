@@ -10,7 +10,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Instant;
 
-use edge_tts_rust::{EdgeTtsClient, SpeakOptions, SynthesisEvent};
+use edge_tts_rust::{Boundary, BoundaryEvent, EdgeTtsClient, SpeakOptions, SynthesisEvent};
 use futures_util::StreamExt;
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JString};
@@ -84,6 +84,7 @@ struct AudioBuffer {
 struct SynthesisSession {
     pcm_state: Mutex<PcmState>,
     pcm_condvar: Condvar,
+    boundary_events: Mutex<VecDeque<BoundaryEvent>>,
     stopped: Arc<AtomicBool>,
 }
 
@@ -243,8 +244,19 @@ impl SynthesisSession {
                 error: None,
             }),
             pcm_condvar: Condvar::new(),
+            boundary_events: Mutex::new(VecDeque::new()),
             stopped: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    fn push_boundary(&self, event: BoundaryEvent) {
+        self.boundary_events.lock().expect("boundary queue poisoned").push_back(event);
+    }
+
+    fn drain_boundaries(&self, max_events: usize) -> Vec<BoundaryEvent> {
+        let mut queue = self.boundary_events.lock().expect("boundary queue poisoned");
+        let count = max_events.max(1).min(queue.len());
+        queue.drain(..count).collect()
     }
 
     fn push_pcm(&self, bytes: &[u8]) {
@@ -715,6 +727,7 @@ fn spawn_synthesis_worker(
                         rate,
                         volume,
                         pitch,
+                        boundary: Boundary::Both,
                         ..SpeakOptions::default()
                     },
                 )
@@ -738,7 +751,7 @@ fn spawn_synthesis_worker(
                         }
                         network_buffer.push(&chunk)
                     }
-                    SynthesisEvent::Boundary(_) => {}
+                    SynthesisEvent::Boundary(event) => network_session.push_boundary(event),
                 }
             }
 
@@ -1039,6 +1052,25 @@ pub extern "system" fn Java_top_initsnow_edge_1tts_1android_EdgeTtsNative_native
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_top_initsnow_edge_1tts_1android_EdgeTtsNative_nativeReadBoundaryEvents(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    request_id: JString<'_>,
+    max_events: i32,
+) -> jstring {
+    let request_id = match read_java_string(&mut env, request_id) {
+        Ok(value) => value,
+        Err(error) => return into_java_string(&mut env, Some(format!("ERROR: {error}"))),
+    };
+    let Some(session) = session(&request_id) else {
+        return into_java_string(&mut env, Some("[]".to_string()));
+    };
+    let events = session.drain_boundaries(max_events.max(1) as usize);
+    let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
+    into_java_string(&mut env, Some(json))
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_top_initsnow_edge_1tts_1android_EdgeTtsNative_nativeGetLastError(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
@@ -1124,6 +1156,45 @@ mod tests {
         let processed = vec![0.0f32; 240];
         let out = resampler.convert_from_beatrice_output(&processed);
         assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_boundary_queue_preserves_order_and_drains_incrementally() {
+        let session = SynthesisSession::new();
+        session.push_boundary(BoundaryEvent {
+            kind: Boundary::Word,
+            offset_ticks: 100,
+            duration_ticks: 50,
+            text: "甲".to_string(),
+        });
+        session.push_boundary(BoundaryEvent {
+            kind: Boundary::Word,
+            offset_ticks: 200,
+            duration_ticks: 60,
+            text: "乙".to_string(),
+        });
+        let first = session.drain_boundaries(1);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].text, "甲");
+        let rest = session.drain_boundaries(8);
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].text, "乙");
+        assert!(session.drain_boundaries(8).is_empty());
+    }
+
+    #[test]
+    fn test_boundary_event_serializes_for_jni() {
+        let event = BoundaryEvent {
+            kind: Boundary::Word,
+            offset_ticks: 12_500_000,
+            duration_ticks: 3_000_000,
+            text: "土地".to_string(),
+        };
+        let json = serde_json::to_value(event).expect("serialize boundary event");
+        assert_eq!(json["kind"], "Word");
+        assert_eq!(json["offset_ticks"], 12_500_000u64);
+        assert_eq!(json["duration_ticks"], 3_000_000u64);
+        assert_eq!(json["text"], "土地");
     }
 
     #[test]

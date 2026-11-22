@@ -72,6 +72,10 @@ public final class EdgeTtsNative {
         return nativeReadPcmChunk(requestId, maxBytes);
     }
 
+    public static String readBoundaryEvents(String requestId, int maxEvents) {
+        return nativeReadBoundaryEvents(requestId, maxEvents);
+    }
+
     public static String getLastError(String requestId) {
         return nativeGetLastError(requestId);
     }
@@ -106,6 +110,8 @@ public final class EdgeTtsNative {
     private static native boolean nativeIsBeatriceSupported();
 
     private static native byte[] nativeReadPcmChunk(String requestId, int maxBytes);
+
+    private static native String nativeReadBoundaryEvents(String requestId, int maxEvents);
 
     private static native String nativeGetLastError(String requestId);
 

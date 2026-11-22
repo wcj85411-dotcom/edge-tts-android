@@ -8,6 +8,7 @@ use serde_json::Value;
 pub enum Boundary {
     Word,
     Sentence,
+    Both,
 }
 
 impl Boundary {
@@ -15,6 +16,7 @@ impl Boundary {
         match self {
             Boundary::Word => ("true", "false"),
             Boundary::Sentence => ("false", "true"),
+            Boundary::Both => ("true", "true"),
         }
     }
 }
@@ -50,7 +52,7 @@ pub struct Voice {
     pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BoundaryEvent {
     pub kind: Boundary,
     pub offset_ticks: u64,

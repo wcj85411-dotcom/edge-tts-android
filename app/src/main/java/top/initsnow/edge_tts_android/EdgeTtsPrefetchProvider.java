@@ -6,6 +6,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
+import android.util.Log;
 import android.content.pm.PackageManager;
 
 /**
@@ -13,7 +14,11 @@ import android.content.pm.PackageManager;
  * paragraph be synthesized while the current paragraph plays.
  */
 public final class EdgeTtsPrefetchProvider extends ContentProvider {
+    private static final String TAG = "EdgeTtsPrefetchProvider";
     private static final String[] ALLOWED_CALLERS = {
+            "io.legado.app.release",
+            "io.legado.app.debug",
+            "io.legado.app",
             "io.legado.app.voicebeta.debug",
             "io.legado.app.voicebeta.release",
             "io.legado.app.voicebeta",
@@ -45,6 +50,8 @@ public final class EdgeTtsPrefetchProvider extends ContentProvider {
             }
         }
         if (!authorized) {
+            Log.w(TAG, "Rejected prefetch caller packages="
+                    + (packages == null ? "null" : java.util.Arrays.toString(packages)));
             result.putBoolean("accepted", false);
             return result;
         }
@@ -56,7 +63,9 @@ public final class EdgeTtsPrefetchProvider extends ContentProvider {
         }
 
         PrefetchManager.SynthesisConfig config = PrefetchManager.getLastConfig();
-        result.putBoolean("accepted", PrefetchManager.prefetch(text, config));
+        boolean accepted = PrefetchManager.prefetch(text, config);
+        Log.i(TAG, "Prefetch request accepted=" + accepted + " chars=" + text.length());
+        result.putBoolean("accepted", accepted);
         return result;
     }
 
