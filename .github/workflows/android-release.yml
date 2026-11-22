@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - stable/0.1.x
       - master
       - voice-gap-pool-experiment
       - voice-parallel-prefetch-prototype
