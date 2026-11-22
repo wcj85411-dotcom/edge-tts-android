@@ -70,7 +70,7 @@
         </service>
             <provider
             android:name=".EdgeTtsPrefetchProvider"
-            android:authorities="top.initsnow.edge_tts_android.prefetchtest.lab.prefetch"
+            android:authorities="top.initsnow.edge_tts_android.prefetchtest.prefetch"
             android:exported="true" />
     </application>
 
